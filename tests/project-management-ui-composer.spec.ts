@@ -35,7 +35,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       );
     });
 
-  test("Task Composer restores a scoped local draft and creates exactly one Task on desktop and mobile", async ({
+  test("Task Composer restores a scoped local draft and creates exactly one Task on the shared frontend", async ({
       context,
       page,
       baseURL,
@@ -135,13 +135,13 @@ test.describe("project management UI project-management-ui-composer", () => {
         .fill("创建页、权限、幂等和数据库断言均通过");
       await page
         .getByLabel("验收要求")
-        .fill("由 Playwright 同时验证 Desktop 与 Pixel 5");
+        .fill("由 Playwright 同时验证 统一界面");
       await page.getByLabel("预期完成时间").fill("2026-09-08T09:00");
       await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("1/200");
       await expect(page.getByTestId("task-composer-temporary-count")).toHaveCount(0);
       const milestoneTime = page.getByLabel("预期完成时间");
       const originalMilestoneTime = await milestoneTime.inputValue();
-      if (testInfo.project.name === "desktop") {
+      {
         await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         const milestoneAnchor = page
           .getByTestId("time-canvas-root")
@@ -154,8 +154,6 @@ test.describe("project management UI project-management-ui-composer", () => {
         await expect(milestoneTime).toHaveValue(originalMilestoneTime);
         await page.getByRole("button", { name: "重做" }).click();
         await expect(milestoneTime).toHaveValue(movedMilestoneTime);
-      } else {
-        await expect(page.getByTestId("time-canvas-root")).toBeHidden();
       }
       await milestoneTime.fill("");
       await expect(
@@ -343,7 +341,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.reload();
       await page.getByRole("button", { name: "恢复草稿" }).click();
       await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("200/200");
-      if (testInfo.project.name === "desktop") {
+      {
         const concurrentPage = await context.newPage();
         await concurrentPage.goto("/progress/tasks/new?start=2026-09-01");
         await expect(
@@ -495,7 +493,7 @@ test.describe("project management UI project-management-ui-composer", () => {
           return stored;
         }, extremeDraft.key),
       ).toBeUndefined();
-      if (testInfo.project.name === "desktop") {
+      {
         await page.clock.install();
         await page.goto("/progress/tasks/new");
         await page.getByLabel("任务名称").fill("立即放弃的防抖草稿");
@@ -601,7 +599,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       const multiSelection = page.getByTestId(
         "task-composer-anchor-multi-selection",
       );
-      if (testInfo.project.name === "desktop") {
+      {
         await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         await expect(canvas).toBeVisible();
         await expect(multiSelection).toBeVisible();
@@ -893,12 +891,6 @@ test.describe("project management UI project-management-ui-composer", () => {
         expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-07T09:00");
         expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-11T09:00");
         expect(await readTerminalTime()).toBe("2026-09-18T18:00");
-      } else {
-        await expect(canvas).toBeHidden();
-        await expect(multiSelection).toBeHidden();
-        await expect(
-          page.getByRole("button", { name: "批量移动" }),
-        ).toBeHidden();
       }
 
       expect(
@@ -1116,8 +1108,8 @@ test.describe("project management UI project-management-ui-composer", () => {
       context,
       page,
       baseURL,
-    }, testInfo) => {
-      test.skip(testInfo.project.name !== "desktop", "草稿 tombstone 只需在桌面验证一次");
+    }) => {
+
       const creator = await createAccountPerson(
         `Composer V4 Baseline ${randomUUID()}`,
       );

@@ -94,17 +94,11 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("采购面板能进入新建、列表、详情和看板且旧工坊入口已下线", async ({ page }, testInfo) => {
+  test("采购面板能进入新建、列表、详情和看板且旧工坊入口已下线", async ({ page }) => {
     await page.goto("/procurement", { waitUntil: "networkidle" });
     await expectHealthyPage(page);
 
-    if (testInfo.project.name === "mobile") {
-      await page.getByRole("button", { name: "打开采购管理导航" }).click();
-      await page
-        .getByTestId("procurement-drawer")
-        .getByRole("link", { name: "新建申请" })
-        .click();
-    } else {
+    {
       await page
         .getByTestId("procurement-sidebar")
         .getByRole("link", { name: "新建申请" })
@@ -339,7 +333,7 @@ test.describe("管理员面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("关键时间点可通过表单和时间线拖动后统一保存", async ({ page }, testInfo) => {
+  test("关键时间点可通过表单和时间线拖动后统一保存", async ({ page }) => {
     test.setTimeout(60_000);
     const markerName = `PW关键时间点-${Date.now()}`;
     const denseMarkers = Array.from({ length: 6 }, (_, index) => ({
@@ -442,7 +436,7 @@ test.describe("管理员面板", () => {
     await expect(page.getByText("全局关键节点")).toHaveCount(0);
     await expect(page.getByTestId(`global-time-marker-line-${persisted.id}`)).toBeVisible();
     const beforeDrag = await editor.getByLabel("时间（上海）").inputValue();
-    await dragTimelineMarker(page, handle, 45, testInfo.project.name === "mobile");
+    await dragTimelineMarker(page, handle, 45);
     await expect(editor.getByLabel("时间（上海）")).not.toHaveValue(beforeDrag);
 
     const pendingValue = await editor.getByLabel("时间（上海）").inputValue();
@@ -460,7 +454,7 @@ test.describe("管理员面板", () => {
     await expect(page).toHaveURL(/\/admin\/time-markers$/);
     await page.goBack();
     await expect(page).toHaveURL(/\/admin\/time-markers$/);
-    await dragTimelineMarker(page, handle, 45, testInfo.project.name === "mobile");
+    await dragTimelineMarker(page, handle, 45);
     await expect(editor.getByLabel("时间（上海）")).toHaveValue(pendingValue);
     await expect(page.getByText("有未保存修改")).toHaveCount(0);
     await page.unroute("**/admin/time-markers");
@@ -616,12 +610,7 @@ test.describe("管理员面板", () => {
     await expect(page.getByRole("heading", { name: "车组职责配置" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "技术组职责配置" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "用户与角色" })).toBeVisible();
-    if ((page.viewportSize()?.width ?? 0) < 768) {
-      await expect(page.getByTestId("mobile-team-responsibilities")).toBeVisible();
-      await expect(page.getByTestId("mobile-tech-responsibilities")).toBeVisible();
-      await expect(page.getByTestId("mobile-account-list")).toBeVisible();
-    } else {
-      await expect(page.getByTestId("mobile-team-responsibilities")).toBeHidden();
+    {
       await expect(
         page.getByRole("columnheader", { name: "车组", exact: true }),
       ).toBeVisible();
@@ -630,12 +619,18 @@ test.describe("管理员面板", () => {
       ).toBeVisible();
     }
     const accountsCard = page.getByTestId("accounts-and-roles-card");
-    const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
-      ? accountsCard.getByTestId("mobile-account-list")
-      : accountsCard.locator("table");
+    const visibleAccountList = accountsCard.locator("table");
     await expect(
       visibleAccountList.getByText("李棋轩", { exact: true }).first(),
     ).toBeVisible();
+
+    await page.setViewportSize({ width: 560, height: 1000 });
+    await expect(page.getByRole("columnheader", { name: "车组", exact: true })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "技术组", exact: true })).toBeVisible();
+    await expect(visibleAccountList).toBeVisible();
+    await expect(visibleAccountList.getByRole("button", { name: "查看记录" })).toBeVisible();
+    await expectHealthyPage(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
 
     const accountSelect = accountsCard.getByRole("combobox", {
       name: "选择要配置角色的用户",
@@ -739,9 +734,7 @@ test.describe("管理员面板", () => {
     });
     await page.reload({ waitUntil: "networkidle" });
     const refreshedAccountsCard = page.getByTestId("accounts-and-roles-card");
-    const refreshedAccountList = (page.viewportSize()?.width ?? 0) < 768
-      ? refreshedAccountsCard.getByTestId("mobile-account-list")
-      : refreshedAccountsCard.locator("table");
+    const refreshedAccountList = (refreshedAccountsCard.locator("table"));
 
     await refreshedAccountList
       .getByRole("button", { name: "查看记录" })
@@ -836,9 +829,7 @@ test.describe("管理员面板", () => {
         waitUntil: "networkidle",
       });
       const accountsCard = page.getByTestId("accounts-and-roles-card");
-      const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
-        ? accountsCard.getByTestId("mobile-account-list")
-        : accountsCard.getByRole("table");
+      const visibleAccountList = (accountsCard.getByRole("table"));
       await expect(visibleAccountList.getByText(displayName, { exact: true })).toBeVisible();
       await expect(visibleAccountList.getByText("缺少飞书身份")).toBeVisible();
       await visibleAccountList.getByRole("button", { name: "查看记录" }).click();
@@ -1039,9 +1030,7 @@ test.describe("管理员面板", () => {
     // Wait for all mutation-triggered RSC refreshes before opening local dialog state.
     await page.reload({ waitUntil: "networkidle" });
     const accountsCard = page.getByTestId("accounts-and-roles-card");
-    const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
-      ? accountsCard.getByTestId("mobile-account-list")
-      : accountsCard.getByRole("table");
+    const visibleAccountList = (accountsCard.getByRole("table"));
     await visibleAccountList.getByRole("button", { name: "查看记录" }).click();
     const historyDialog = page.getByTestId("account-history-dialog");
     await expect(historyDialog.getByText("报销员 · 工程").first()).toBeVisible();
@@ -1229,7 +1218,6 @@ async function dragTimelineMarker(
   page: Page,
   marker: Locator,
   deltaX: number,
-  touch: boolean,
 ) {
   await marker.scrollIntoViewIfNeeded();
   const box = await marker.boundingBox();
@@ -1238,33 +1226,11 @@ async function dragTimelineMarker(
     x: box.x + box.width / 2,
     y: box.y + box.height / 2,
   };
-  if (!touch) {
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(start.x + deltaX, start.y, { steps: 5 });
-    await page.mouse.up();
-    return;
-  }
 
-  const session = await page.context().newCDPSession(page);
-  try {
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchStart",
-      touchPoints: [{ ...start, id: 1 }],
-    });
-    for (let step = 1; step <= 5; step += 1) {
-      await session.send("Input.dispatchTouchEvent", {
-        type: "touchMove",
-        touchPoints: [{ x: start.x + (deltaX * step) / 5, y: start.y, id: 1 }],
-      });
-    }
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchEnd",
-      touchPoints: [],
-    });
-  } finally {
-    await session.detach();
-  }
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + deltaX, start.y, { steps: 5 });
+  await page.mouse.up();
 }
 
 async function pageHasInputValue(page: Page, value: string) {

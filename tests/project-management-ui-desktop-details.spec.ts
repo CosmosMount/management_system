@@ -83,7 +83,7 @@ test("资源排期默认隐藏无效选择器且能按人员缩小范围", async
   await expect(page.getByRole("combobox", { name: "筛选人员" })).toHaveCount(0);
   await page.goto(`/progress/resources?all=0&people=${fixture.owner.person.id}`);
   await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-  if (testInfo.project.name === "desktop") {
+  {
     const canvasBox = await page.getByTestId("time-canvas-scroll").boundingBox();
     expect(canvasBox!.y).toBeLessThan(650);
     await page.screenshot({ path: testInfo.outputPath("resources-first-screen.png"), animations: "disabled" });

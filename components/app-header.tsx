@@ -15,26 +15,25 @@ export async function AppHeader() {
     !!session?.user?.openId && (await isSuperAdmin(session.user.openId));
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-        <nav className="flex items-center gap-1 sm:gap-4">
+    <header className="sticky top-0 z-50 overflow-x-auto border-b border-border/60 bg-background/80 backdrop-blur-md">
+      <div className="mx-auto flex h-14 min-w-max max-w-7xl items-center justify-between px-4">
+        <nav className="flex items-center gap-4">
           <Link
             href="/"
             className="mr-2 font-semibold tracking-tight text-foreground"
           >
             {APP_NAME}
           </Link>
-          <Link href="/" className={cn(navLinkClass, "hidden sm:inline")}>
+          <Link href="/" className={navLinkClass}>
             首页
           </Link>
           <Link href={routes.procurement.root} className={navLinkClass}>
             采购管理
           </Link>
           <Link href={routes.progress.root} className={navLinkClass}>
-            <span className="hidden sm:inline">项目管理</span>
-            <span className="sm:hidden">项目</span>
+            项目管理
           </Link>
-          <Link href="/profile" className={cn(navLinkClass, "hidden sm:inline")}>
+          <Link href="/profile" className={navLinkClass}>
             个人中心
           </Link>
           {showAdmin && (
@@ -64,7 +63,7 @@ export async function AppHeader() {
                   className="h-8 w-8 rounded-full ring-2 ring-primary/10"
                 />
               )}
-              <span className="hidden text-sm sm:inline">{session.user.name}</span>
+              <span className="text-sm">{session.user.name}</span>
             </Link>
             <form
               action={async () => {

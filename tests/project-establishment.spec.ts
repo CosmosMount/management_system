@@ -33,7 +33,7 @@ import {
 } from "./helpers/functional-fixtures";
 
 test.describe("Project 立项与生命周期", () => {
-  test("Project 导航、默认筛选、列表和创建页在桌面与移动端可用", { tag: "@smoke" }, async ({ context, page, baseURL }, testInfo) => {
+  test("Project 导航、默认筛选、列表和创建页在统一界面可用", { tag: "@smoke" }, async ({ context, page, baseURL }, testInfo) => {
     const requester = await actor(`Project UI ${testInfo.project.name}`);
     const admin = await actor(`Project UI 管理员 ${testInfo.project.name}`, "PROJECT_ADMINISTRATOR");
     const participant = await actor(`Project UI Task 成员 ${testInfo.project.name}`);
@@ -74,15 +74,11 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByRole("combobox", { name: "项目范围" })).toHaveValue("1");
     await expect(page.getByRole("combobox", { name: "项目状态" })).toHaveValue("ACTIVE");
     await expect(page.getByText(name, { exact: true })).toBeVisible();
-    if (testInfo.project.name === "desktop") {
+    {
       const navigation = page.getByRole("navigation", { name: "项目管理导航" });
       await expect(navigation.getByRole("link", { name: "人员时间线", exact: true })).toHaveAttribute("href", "/progress/kanban");
       await expect(navigation.getByRole("link", { name: "项目", exact: true })).toHaveAttribute("href", "/progress/projects");
       await expect(navigation.getByRole("link", { name: "任务", exact: true })).toHaveAttribute("href", "/progress/tasks");
-    } else {
-      await page.getByRole("button", { name: "打开项目管理导航" }).click();
-      await expect(page.getByTestId("project-management-drawer").getByRole("link", { name: "项目" })).toHaveAttribute("aria-current", "page");
-      await page.keyboard.press("Escape");
     }
     await expectHealthyPage(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -121,7 +117,7 @@ test.describe("Project 立项与生命周期", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 
-  test("立项驳回空意见在桌面与移动端标红并聚焦", async ({
+  test("立项驳回空意见在统一界面标红并聚焦", async ({
     context,
     page,
     baseURL,
@@ -224,7 +220,7 @@ test.describe("Project 立项与生命周期", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(120_000);
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -421,7 +417,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.locator("#establishment")).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expectProjectOverview(page);
-    if (testInfo.project.name === "desktop") {
+    {
       await page.setViewportSize({ width: 1279, height: 1000 });
       await expectProjectOverview(page);
       await page.setViewportSize({ width: 1280, height: 1000 });
@@ -432,24 +428,7 @@ test.describe("Project 立项与生命周期", () => {
     await revealProjectArea(page, "计划与投入");
     await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
     await expect(page.getByTestId("project-summary-view")).toBeVisible();
-    if (testInfo.project.name === "mobile") {
-      const canvasScroll = page.getByTestId("time-canvas-scroll");
-      const initialScroll = await canvasScroll.evaluate((element) => ({
-        left: element.scrollLeft,
-        maximum: element.scrollWidth - element.clientWidth,
-      }));
-      expect(initialScroll.maximum).toBeGreaterThan(1);
-      await canvasScroll.evaluate((element) => {
-        const maximum = element.scrollWidth - element.clientWidth;
-        element.scrollLeft = element.scrollLeft < maximum
-          ? Math.min(maximum, element.scrollLeft + 50)
-          : Math.max(0, element.scrollLeft - 50);
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await expect
-        .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
-        .not.toBe(initialScroll.left);
-    }
+
 
     await revealProjectArea(page, "任务概览");
     const draftGroup = page.getByTestId("project-task-group-DRAFT");
@@ -1184,8 +1163,8 @@ test.describe("Project 立项与生命周期", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "节点预算错误只需在桌面 fixture 覆盖一次");
+  }) => {
+
     test.setTimeout(180_000);
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));

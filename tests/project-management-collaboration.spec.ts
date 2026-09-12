@@ -34,8 +34,8 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "本功能按产品决策只做桌面端专项验收");
+  }) => {
+
     test.setTimeout(90_000);
     const owner = await createActor(`协作功能负责人 ${randomUUID()}`);
     const participant = await createActor(`协作功能参与人 ${randomUUID()}`);
@@ -410,7 +410,7 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: admin.actor.accountId } })).toBeGreaterThan(0);
   });
 
-  test("协作表单空提交在桌面与移动端标红、聚焦并逐字段清错", async ({
+  test("协作表单空提交在统一界面标红、聚焦并逐字段清错", async ({
     context,
     page,
     baseURL,
@@ -543,8 +543,8 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     expect(activity.items.every((item) => !item.title.includes("unknown"))).toBe(true);
   });
 
-  test("Task 评论与同一操作人的 Task 更新并发时按 Task→Person 顺序完成", async ({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "数据库锁顺序只需单项目回归");
+  test("Task 评论与同一操作人的 Task 更新并发时按 Task→Person 顺序完成", async ({}) => {
+
     test.setTimeout(90_000);
 
     await createActor(

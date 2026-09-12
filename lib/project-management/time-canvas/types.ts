@@ -230,7 +230,6 @@ export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
   enableAnchorMarqueeSelection?: boolean;
-  desktopOnlySegmentTransform?: boolean;
   creationRange?: TimeCanvasBrushRequest | null;
   selectedAnchorIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;

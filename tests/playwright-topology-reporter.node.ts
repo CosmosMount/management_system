@@ -77,7 +77,7 @@ test("Playwright reporter 通过真实 CLI 区分全集与局部收集并把失�
       ["--project=*"],
       ["--list", "--project=desktop"],
       ["--list", "--project", "desktop"],
-      ["--list", "--project", "desktop", "mobile"],
+      ["--list", "--project", "desktop", "node-db"],
       ["ui.spec.ts", "--list"],
       ["--list", "--grep=synthetic-ui"],
       ["--list", "--grep", "synthetic-ui"],
@@ -211,7 +211,6 @@ export default defineConfig({
   projects: [
     { name: "node-db", testMatch: nodeDbMatch },
     { name: "desktop", testMatch: desktopMatch },
-    { name: "mobile", testMatch: ["ui.spec.ts"] },
   ],
 });
 `,

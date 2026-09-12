@@ -527,7 +527,7 @@ test("停用人员的采购页面只读且隐藏所有写入口", async ({
   await expect.poll(() => new URL(page.url()).pathname).toBe(
     "/procurement/dashboard",
   );
-  if (testInfo.project.name === "desktop") {
+  {
     const sidebar = page.getByTestId("procurement-sidebar");
     await expect(sidebar).toBeVisible();
     await expect(
@@ -536,19 +536,6 @@ test("停用人员的采购页面只读且隐藏所有写入口", async ({
     await expect(
       sidebar.getByRole("link", { name: "工坊加工费" }),
     ).toHaveCount(0);
-  } else {
-    await page
-      .getByRole("button", { name: "打开采购管理导航" })
-      .click();
-    const drawer = page.getByTestId("procurement-drawer");
-    await expect(drawer).toBeVisible();
-    await expect(
-      drawer.getByRole("link", { name: "新建申请" }),
-    ).toHaveCount(0);
-    await expect(
-      drawer.getByRole("link", { name: "工坊加工费" }),
-    ).toHaveCount(0);
-    await page.keyboard.press("Escape");
   }
 
   await page.goto(`/procurement/${order.id}`, { waitUntil: "networkidle" });

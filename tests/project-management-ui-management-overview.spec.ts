@@ -69,7 +69,7 @@ test("overview query counts readable risks while task plan links and workbench a
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("flat workbench places its timeline before task panels and canonicalizes retired views", async ({ context, page, baseURL }, testInfo) => {
+test("flat workbench places its timeline before task panels and canonicalizes retired views", async ({ context, page, baseURL }) => {
   const user = await createAccountPerson(`工作台空态 ${randomUUID()}`);
   await loginAsTestUser(context, baseURL, { openId: user.openId, name: user.person.displayName });
   const errors: Error[] = [];
@@ -95,8 +95,8 @@ test("flat workbench places its timeline before task panels and canonicalizes re
   expect(timelineBox!.y).toBeGreaterThanOrEqual(metricsBox!.y + metricsBox!.height);
   expect(contentBox!.y).toBeGreaterThanOrEqual(timelineBox!.y + timelineBox!.height);
   const metricColumns = await metrics.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
-  expect(metricColumns).toBe(testInfo.project.name === "desktop" ? 4 : 1);
-  if (testInfo.project.name === "desktop") {
+  expect(metricColumns).toBe((4));
+  {
     const nextStep = await content.getByRole("heading", { name: "我的待办", exact: true }).boundingBox();
     const myTasks = await content.getByRole("heading", { name: "参与任务", exact: true }).boundingBox();
     expect(Math.abs(nextStep!.y - myTasks!.y)).toBeLessThan(10);
@@ -109,10 +109,6 @@ test("flat workbench places its timeline before task panels and canonicalizes re
     await expect.poll(() => metrics.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(2);
     await expectHealthyPage(page);
     await page.setViewportSize(desktopViewport);
-  } else {
-    const inboxBox = await content.getByRole("region", { name: "我的待办", exact: true }).boundingBox();
-    const tasksBox = await content.getByRole("region", { name: "参与任务", exact: true }).boundingBox();
-    expect(tasksBox!.y).toBeGreaterThanOrEqual(inboxBox!.y + inboxBox!.height);
   }
   await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
   for (const retiredView of ["schedule", "management"]) {

@@ -60,7 +60,7 @@ export function TeamResponsibilitiesCard(props: ResponsibilityCardProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="min-w-0">
-        <div className="hidden md:block">
+        <div className="min-w-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -102,35 +102,7 @@ export function TeamResponsibilitiesCard(props: ResponsibilityCardProps) {
             </TableBody>
           </Table>
         </div>
-        <div className="grid min-w-0 gap-3 md:hidden" data-testid="mobile-team-responsibilities">
-          {TEAM_OPTIONS.map((team) => (
-            <section key={team} className="min-w-0 space-y-4 rounded-xl border p-4">
-              <h3 className="font-medium">{team}</h3>
-              <MobileResponsibilityBlock
-                label="报销车组组长"
-                scope={team}
-                scopeKind="team"
-                role="TEAM_ADMIN"
-                entries={responsibilitiesFor(responsibilities, "TEAM_ADMIN", team)}
-                pending={pending}
-                run={run}
-                onAdd={onAdd}
-                onRemove={onRemove}
-              />
-              <MobileResponsibilityBlock
-                label="报销员"
-                scope={team}
-                scopeKind="team"
-                role="FINANCE"
-                entries={responsibilitiesFor(responsibilities, "FINANCE", team)}
-                pending={pending}
-                run={run}
-                onAdd={onAdd}
-                onRemove={onRemove}
-              />
-            </section>
-          ))}
-        </div>
+
       </CardContent>
     </Card>
   );
@@ -151,7 +123,7 @@ export function TechGroupResponsibilitiesCard(props: ResponsibilityCardProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="min-w-0">
-        <div className="hidden md:block">
+        <div className="min-w-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -195,37 +167,7 @@ export function TechGroupResponsibilitiesCard(props: ResponsibilityCardProps) {
             </TableBody>
           </Table>
         </div>
-        <div className="grid min-w-0 gap-3 md:hidden" data-testid="mobile-tech-responsibilities">
-          {TECH_GROUP_OPTIONS.map((techGroup) => (
-            <section key={techGroup} className="min-w-0 space-y-4 rounded-xl border p-4">
-              <h3 className="font-medium">{techGroup}</h3>
-              <MobileResponsibilityBlock
-                label="报销技术组组长"
-                scope={techGroup}
-                scopeKind="techGroup"
-                role="TECH_GROUP_ADMIN"
-                entries={responsibilitiesFor(responsibilities, "TECH_GROUP_ADMIN", techGroup)}
-                pending={pending}
-                run={run}
-                onAdd={onAdd}
-                onRemove={onRemove}
-              />
-              <MobileResponsibilityBlock
-                label="指导老师"
-                scope={techGroup}
-                scopeKind="techGroup"
-                role="TEACHER"
-                entries={responsibilitiesFor(responsibilities, "TEACHER", techGroup)}
-                pending={pending}
-                run={run}
-                onAdd={onAdd}
-                onRemove={onRemove}
-                showTeacherEmail
-                teacherEmailOwnerByAccount={teacherEmailOwnerByAccount}
-              />
-            </section>
-          ))}
-        </div>
+
       </CardContent>
     </Card>
   );
@@ -243,18 +185,6 @@ type ResponsibilityCellProps = {
   showTeacherEmail?: boolean;
   teacherEmailOwnerByAccount?: Map<string, { assignmentId: string; techGroup: string }>;
 };
-
-function MobileResponsibilityBlock({
-  label,
-  ...props
-}: ResponsibilityCellProps & { label: string }) {
-  return (
-    <div className="min-w-0 space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">{label}</p>
-      <ResponsibilityCell {...props} />
-    </div>
-  );
-}
 
 function ResponsibilityCell({
   scope,

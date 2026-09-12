@@ -136,7 +136,6 @@ export async function createUiFixture() {
       batchCancelableB.segment.id,
     ] as const,
     brushCreateContent: `P6 UI 画布拖选创建 ${randomUUID()}`,
-    mobileCreateContent: `P6 UI 移动端精确创建 ${randomUUID()}`,
     notificationId: notification.id,
   };
 }

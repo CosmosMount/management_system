@@ -675,7 +675,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(120_000);
     const fixture = await createUiFixture();
     const browserErrors: string[] = [];
@@ -719,7 +719,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     await page.getByRole("option", { name: fixture.taskTitle, exact: true }).click();
     const startInput = editForm.getByLabel("开始", { exact: true });
     const endInput = editForm.getByLabel("结束", { exact: true });
-    if (testInfo.project.name === "desktop") {
+    {
       const block = detailDialog.getByTestId(`segment-block-${created.id}`);
       await block.scrollIntoViewIfNeeded();
       await expect.poll(() => block.evaluate((element) => {
@@ -754,9 +754,6 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(startInput).toHaveValue(movedStart);
       expect(Date.parse(shanghaiDateTimeLocalToIso(await endInput.inputValue())))
         .toBeGreaterThan(Date.parse(shanghaiDateTimeLocalToIso(movedEnd)));
-    } else {
-      await startInput.fill("2027-01-05T10:00");
-      await endInput.fill("2027-01-05T19:00");
     }
     const expectedStartAt = new Date(shanghaiDateTimeLocalToIso(await startInput.inputValue()));
     const expectedEndAt = new Date(shanghaiDateTimeLocalToIso(await endInput.inputValue()));
@@ -844,11 +841,11 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     await expectHealthyPage(page);
   });
 
-  test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
+  test("S7 resource filters, removed routes and unified my-work timeline work on the shared frontend", async ({
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       test.setTimeout(90_000);
       const fixture = await createUiFixture();
       const paginationKey = randomUUID();
@@ -1049,14 +1046,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(dirtyInspector).toBeVisible();
       const unsavedContent = `未保存的历史导航内容 ${randomUUID()}`;
       await dirtyInspector.getByLabel("内容").fill(unsavedContent);
-      if (testInfo.project.name === "desktop") {
+      {
         await page.goBack();
         await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
         await expect(
           page.getByText("当前投入有未保存修改，请保存或关闭后再切换时间窗口。"),
         ).toBeVisible();
-      } else {
-        await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
       }
       await expectHealthyPage(page);
       let discardConfirmationSeen = false;

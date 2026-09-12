@@ -14,7 +14,7 @@ test.describe("全局关键时间点 UI", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const project = await prisma.project.create({
@@ -64,43 +64,39 @@ test.describe("全局关键时间点 UI", () => {
       });
 
       const routes = [
-        { path: `/progress?view=schedule&center=${center}`, desktopOnlyCanvas: false },
+        { path: `/progress?view=schedule&center=${center}`, composerCanvas: false },
         {
           path: `/progress/kanban?people=${fixture.member.person.id}&center=${center}`,
-          desktopOnlyCanvas: false,
+          composerCanvas: false,
         },
         {
           path: `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id}&center=${center}`,
-          desktopOnlyCanvas: false,
+          composerCanvas: false,
         },
         {
           path: "/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER&empty=1&globalMarkers=1",
-          desktopOnlyCanvas: false,
+          composerCanvas: false,
           empty: true,
         },
         {
           path: `/progress/tasks/${fixture.taskId}?section=plan&center=${center}`,
-          desktopOnlyCanvas: false,
+          composerCanvas: false,
         },
         {
           path: `/progress/projects/${project.id}?section=plan&center=${center}`,
-          desktopOnlyCanvas: false,
+          composerCanvas: false,
         },
         {
           path: "/progress/tasks/new?start=2026-08-10",
-          desktopOnlyCanvas: true,
+          composerCanvas: true,
           boundedRange: true,
         },
       ];
 
       for (const route of routes) {
         await page.goto(route.path, { waitUntil: "networkidle" });
-        if (route.desktopOnlyCanvas && testInfo.project.name === "mobile") {
-          await expect(page.getByTestId("time-canvas-root")).toBeHidden();
-          await expectHealthyPage(page);
-          continue;
-        }
-        if (route.desktopOnlyCanvas) {
+
+        if (route.composerCanvas) {
           await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         }
         const markerLine = page

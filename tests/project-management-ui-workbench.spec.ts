@@ -80,9 +80,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         baseURL,
         javaScriptEnabled: false,
         viewport:
-          testInfo.project.name === "mobile"
-            ? { width: 393, height: 727 }
-            : { width: 1_440, height: 1_000 },
+          ({ width: 1_440, height: 1_000 }),
       });
       try {
         await loginAsTestUser(context, baseURL, {
@@ -1179,7 +1177,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       const fixture = await createDraftWorkbenchFixture();
       const addedMember = await createAccountPerson(
         `S6 Unified Editor Member ${randomUUID()}`,
@@ -1246,12 +1244,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(page.getByLabel("任务名称")).toHaveValue(fixture.taskTitle);
       await expect(page.getByText(inactiveCurrentMember.person.displayName)).toBeVisible();
       await expect(page.getByRole("button", { name: "保存任务" }).first()).toBeDisabled();
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -1318,12 +1311,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         })
         .click();
 
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -1830,7 +1818,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       const fixture = await createDraftWorkbenchFixture();
       const outsider = await createAccountPerson("S6 Unified Editor Outsider");
       const searchFillerKey = randomUUID();
@@ -1899,12 +1887,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(page.getByLabel("搜索参与人员", { exact: true })).toHaveCount(0);
       await expect(page.getByText(localOnlyMember.person.displayName)).toHaveCount(0);
       await page.getByLabel("任务名称").fill(participantTitle);
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -3013,7 +2996,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const firstReason = `S6 v2 Revision ${randomUUID()}`;
@@ -3058,7 +3041,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const multiSelection = page.getByTestId(
       "task-composer-anchor-multi-selection",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
       await expect(multiSelection).toContainText("已选 1 个可编辑节点");
       const canvas = page.getByTestId("time-canvas-root");
@@ -3121,12 +3104,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await revisionBatchMoveDialog
         .getByRole("button", { name: "取消" })
         .click();
-    } else {
-      await expect(page.getByTestId("time-canvas-root")).toBeHidden();
-      await expect(multiSelection).toBeHidden();
-      await expect(
-        page.getByRole("button", { name: "批量移动" }),
-      ).toBeHidden();
     }
     const revisionReason = revisionInspector.getByLabel("计划修订名称");
     const revisionDescription = revisionInspector.getByLabel("计划修订详细内容");

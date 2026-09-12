@@ -32,6 +32,47 @@ async function expectTaskExecutionLayout(page: Page) {
 }
 
 test.describe("project management UI project-management-ui-routes-responsive", () => {
+  test("统一投入表单在窄窗口保留画布操作与网络失败重试", async ({ context, page, baseURL }) => {
+    const fixture = await createUiFixture();
+    const content = `统一投入表单重试 ${randomUUID()}`;
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.setViewportSize({ width: 560, height: 1000 });
+    await page.goto(`/progress/resources?people=${fixture.owner.person.id}&scale=week`);
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await expect(quickCreate.getByLabel("内容")).toHaveValue("");
+    await expect(quickCreate.getByLabel("投入比例")).toHaveCount(0);
+    await expect(quickCreate.getByLabel("完成比例")).toHaveCount(0);
+    await expect(quickCreate.getByLabel("预期输出")).toHaveCount(0);
+    const draftRange = page.getByTestId("time-canvas-creation-range");
+    await expect(draftRange).toHaveCSS("pointer-events", "auto");
+    await expect(draftRange.locator('[data-create-resize-handle="start"]')).toBeVisible();
+    await expect(draftRange.locator('[data-create-resize-handle="end"]')).toBeVisible();
+    await quickCreate.getByLabel("内容").fill(content);
+    const actionUrl = "**/progress/resources**";
+    let actionAborted = false;
+    const abortFirstAction = async (route: import("@playwright/test").Route) => {
+      if (!actionAborted && route.request().method() === "POST") {
+        actionAborted = true;
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    };
+    await page.route(actionUrl, abortFirstAction);
+    await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+    await expect(page.getByText("网络异常，未能保存；输入仍保留，可直接重试。")).toBeVisible();
+    await expect(quickCreate.getByLabel("内容")).toHaveValue(content);
+    await page.unroute(actionUrl, abortFirstAction);
+    await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+    await expect(page.getByText("已创建投入记录")).toBeVisible();
+    await expect.poll(() => prisma.workSegment.count({ where: { content } })).toBe(1);
+    await expectHealthyPage(page);
+  });
+
   test.beforeAll(async () => {
       const administrator = await createAccountPerson(
         `S5 UI Global Approval Administrator ${randomUUID()}`,
@@ -148,7 +189,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByRole("navigation", { name: "任务详情分区" })).toHaveCount(0);
       await expect(page.getByTestId("task-overview").getByText("车组/技术组", { exact: true })).toBeVisible();
       await expectHealthyPage(page);
-      if (testInfo.project.name === "desktop") {
+      {
         await page.setViewportSize({ width: 1279, height: 1000 });
         await expectTaskExecutionLayout(page);
         await page.setViewportSize({ width: 1280, height: 1000 });
@@ -388,7 +429,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
       );
-      if (testInfo.project.name === "desktop") {
+      {
         await loginAsTestUser(context, baseURL, {
           openId: fixture.admin.openId,
           name: fixture.admin.person.displayName,
@@ -584,61 +625,6 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         await expect(confirmableSegment).toBeVisible();
         await confirmableSegment.focus();
         await confirmableSegment.press("Enter");
-      } else {
-        await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-        await page.getByRole("button", { name: "新增投入" }).click();
-        const quickCreate = page.getByRole("form", { name: "投入快速创建" });
-        await expect(quickCreate.getByLabel("投入比例")).toHaveCount(0);
-        await expect(quickCreate.getByLabel("完成比例")).toHaveCount(0);
-        await expect(page.getByTestId("time-canvas-creation-range")).toHaveCSS(
-          "pointer-events",
-          "none",
-        );
-        await quickCreate.getByLabel("内容").fill(fixture.mobileCreateContent);
-        await expect(quickCreate.getByLabel("预期输出")).toHaveCount(0);
-        const actionUrl = "**/progress/resources**";
-        let actionAborted = false;
-        const abortFirstAction = async (route: import("@playwright/test").Route) => {
-          if (!actionAborted && route.request().method() === "POST") {
-            actionAborted = true;
-            await route.abort();
-            return;
-          }
-          await route.continue();
-        };
-        await page.route(actionUrl, abortFirstAction);
-        await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
-        await expect(page.getByText("网络异常，未能保存；输入仍保留，可直接重试。")).toBeVisible();
-        await expect(quickCreate.getByLabel("内容")).toHaveValue(fixture.mobileCreateContent);
-        await page.unroute(actionUrl, abortFirstAction);
-        await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
-        await expect(page.getByText("已创建投入记录")).toBeVisible();
-        await expect
-          .poll(() => prisma.workSegment.findFirst({
-            where: { content: fixture.mobileCreateContent },
-            select: { content: true },
-          }))
-          .toEqual({ content: fixture.mobileCreateContent });
-        await expect(
-          page.getByRole("button", {
-            name: new RegExp(fixture.mobileCreateContent),
-          }),
-        ).toBeVisible();
-        const confirmableUrl = new URL(page.url());
-        confirmableUrl.searchParams.set(
-          "center",
-          "2026-08-10T09:30:00.000Z",
-        );
-        confirmableUrl.searchParams.set("scale", "week");
-        await page.goto(
-          `${confirmableUrl.pathname}?${confirmableUrl.searchParams.toString()}`,
-        );
-        const confirmableSegment = page.getByTestId(
-          `segment-block-${fixture.confirmableSegmentId}`,
-        );
-        await expect(confirmableSegment).toBeVisible({ timeout: 15_000 });
-        await confirmableSegment.focus();
-        await confirmableSegment.press("Enter");
       }
       await expect(page.getByTestId("segment-inspector")).toBeVisible();
       await expect(
@@ -654,7 +640,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(
         commonInspector.getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
-      if (testInfo.project.name === "desktop") {
+      {
         const editableContent = commonInspector.getByLabel("内容", { exact: true });
         await editableContent.fill("P6 UI 未保存 Task 导航保护");
         page.once("dialog", (dialog) => {
@@ -811,7 +797,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
-  test("200 Milestone Task 工作台在桌面与移动端保持可用", async ({
+  test("200 Milestone Task 工作台在统一界面保持可用", async ({
     context,
     page,
     baseURL,
@@ -872,7 +858,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     expect(pageErrors).toEqual([]);
   });
 
-  test("S8 dashboard, action inbox and notification preferences work on desktop and mobile", async ({
+  test("S8 dashboard, action inbox and notification preferences work on the shared frontend", async ({
       context,
       page,
       baseURL,

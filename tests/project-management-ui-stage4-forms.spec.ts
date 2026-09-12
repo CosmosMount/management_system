@@ -8,8 +8,8 @@ import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixture
 import { openTaskComposerDisclosure } from "./helpers/project-management-plan-mutation-fixtures";
 import { actor, createAccountPerson, createDraftWorkbenchFixture, createUiFixture, grantRole } from "./helpers/project-management-ui-fixtures";
 
-test.beforeEach(async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Stage4 桌面表单专项");
+test.beforeEach(async ({ page }) => {
+
   assertOfficialPlaywrightEnvironment(process.env);
   expect(page.viewportSize()).toEqual({ width: 1440, height: 1000 });
 });

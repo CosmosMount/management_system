@@ -6,21 +6,10 @@ import { usePathname } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
-  Menu,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 export type ManagementNavigationItem = {
@@ -49,8 +38,6 @@ export function ManagementShell({
 }: ManagementShellProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const currentLabel =
-    navigationItems.find((item) => item.match(pathname))?.label ?? title;
 
   return (
     <div
@@ -60,7 +47,7 @@ export function ManagementShell({
       <aside
         aria-label={`${title}侧栏`}
         className={cn(
-          "pm-shell-motion sticky top-14 hidden h-[calc(100dvh-3.5rem)] shrink-0 flex-col border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] transition-[width] duration-150 md:flex",
+          "pm-shell-motion sticky top-14 flex h-[calc(100dvh-3.5rem)] shrink-0 flex-col border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] transition-[width] duration-150",
           collapsed ? "w-16" : "w-56",
         )}
         data-state={collapsed ? "collapsed" : "expanded"}
@@ -108,16 +95,8 @@ export function ManagementShell({
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <ManagementMobileNavigation
-          key={pathname}
-          title={title}
-          pathname={pathname}
-          currentLabel={currentLabel}
-          navigationItems={navigationItems}
-          testIdPrefix={testIdPrefix}
-        />
-        <main className="min-w-0 flex-1" id={`${testIdPrefix}-content`}>
+      <div className="flex min-w-0 flex-1 flex-col overflow-x-auto">
+        <main className="min-w-[64rem] flex-1" id={`${testIdPrefix}-content`}>
           {children}
         </main>
       </div>
@@ -130,13 +109,11 @@ function ManagementNavigation({
   pathname,
   navigationItems,
   collapsed = false,
-  onNavigate,
 }: {
   title: string;
   pathname: string;
   navigationItems: ManagementNavigationItem[];
   collapsed?: boolean;
-  onNavigate?: () => void;
 }) {
   return (
     <nav
@@ -172,7 +149,6 @@ function ManagementNavigation({
                 "bg-[var(--pm-nav-active-bg)] text-[var(--pm-nav-active-foreground)]",
               collapsed && "justify-center px-0",
             )}
-            onClick={onNavigate}
             title={collapsed ? accessibleLabel : undefined}
           >
             {active && (
@@ -203,81 +179,5 @@ function ManagementNavigation({
         );
       })}
     </nav>
-  );
-}
-
-function ManagementMobileNavigation({
-  title,
-  pathname,
-  currentLabel,
-  navigationItems,
-  testIdPrefix,
-}: {
-  title: string;
-  pathname: string;
-  currentLabel: string;
-  navigationItems: ManagementNavigationItem[];
-  testIdPrefix: string;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div
-      className="sticky top-14 z-30 flex h-14 min-w-0 items-center gap-3 border-b border-[var(--pm-shell-border)] bg-[var(--pm-command-bar-bg)] px-4 md:hidden"
-      data-testid={`${testIdPrefix}-mobile-bar`}
-    >
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label={`打开${title}导航`}
-            >
-              <Menu aria-hidden="true" />
-            </Button>
-          }
-        />
-        <DialogContent
-          showCloseButton={false}
-          className="inset-y-0 left-0 top-0 flex h-dvh w-[min(20rem,calc(100vw-2rem))] max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] p-0 motion-reduce:animate-none motion-reduce:transition-none data-open:slide-in-from-left data-closed:slide-out-to-left sm:max-w-none"
-          data-testid={`${testIdPrefix}-drawer`}
-        >
-          <DialogHeader className="shrink-0 flex-row items-start justify-between gap-3 border-b border-[var(--pm-shell-border)] p-4 text-left">
-            <div className="min-w-0">
-              <DialogTitle>{title}导航</DialogTitle>
-              <DialogDescription className="mt-1">
-                当前页面：{currentLabel}
-              </DialogDescription>
-            </div>
-            <DialogClose
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`关闭${title}导航`}
-                >
-                  <X aria-hidden="true" />
-                </Button>
-              }
-            />
-          </DialogHeader>
-          <ManagementNavigation
-            title={title}
-            pathname={pathname}
-            navigationItems={navigationItems}
-            onNavigate={() => setOpen(false)}
-          />
-        </DialogContent>
-      </Dialog>
-      <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{title}</p>
-        <p className="truncate text-sm font-medium" title={currentLabel}>
-          {currentLabel}
-        </p>
-      </div>
-    </div>
   );
 }

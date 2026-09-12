@@ -39,7 +39,7 @@ test("详情头部默认展开完整资料并保留桌面操作区", async ({ co
     await expect(overview.getByRole("button", { name: "复制链接", exact: true })).toBeVisible();
     await expect(page.getByTestId("project-management-command-bar")).toContainText(kind === "project" ? "查看 Project 基本信息" : "Task 执行工作台");
     await expect(overview.locator("p").filter({ hasText: new RegExp(`^${title}$`) })).toBeVisible();
-    if (testInfo.project.name === "desktop") {
+    {
       const boxes = await overview.locator("dl > div").evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().toJSON()));
       const columns = kind === "project" ? 3 : 4;
       expect(boxes).toHaveLength(kind === "project" ? 3 : 8);

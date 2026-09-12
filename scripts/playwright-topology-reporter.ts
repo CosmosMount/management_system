@@ -14,7 +14,7 @@ import {
 
 const projectsForKind = {
   "node-db": new Set(["node-db"]),
-  ui: new Set(["desktop", "mobile"]),
+  ui: new Set(["desktop"]),
 } as const;
 
 class PlaywrightTopologyReporter implements Reporter {

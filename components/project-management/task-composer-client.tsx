@@ -1129,25 +1129,7 @@ export function TaskComposerClient({
           }
           optionLoading={false}
           submitting={submitting}
-          submitDisabled={isEditingDraft && !dirty}
-          submitLabel={
-            isEditingDraft
-              ? "保存 Task"
-              : isResubmittingRevision
-                ? "修改并重新送审"
-                : isRevisionComposer
-                  ? "创建并送审"
-                  : "创建草稿"
-          }
-          submittingLabel={
-            isEditingDraft
-              ? "正在保存…"
-              : isResubmittingRevision
-                ? "正在重新送审…"
-                : isRevisionComposer
-                  ? "正在创建并送审…"
-                  : "正在创建…"
-          }
+
           onSelect={selectEntity}
           onBeginMilestone={beginMilestone}
           onConstrainAnchorMove={constrainAnchorMove}
@@ -1156,7 +1138,7 @@ export function TaskComposerClient({
           onBatchDelay={batchDelay}
           onUpdateInspector={updateInspector}
           onDeleteMilestones={removeMilestones}
-          onSubmit={submit}
+
         />
       </div>
 

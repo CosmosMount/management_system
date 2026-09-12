@@ -77,9 +77,6 @@ export function TaskComposerPlanEditor({
   notice,
   optionLoading,
   submitting,
-  submitDisabled,
-  submitLabel,
-  submittingLabel,
   onSelect,
   onBeginMilestone,
   onConstrainAnchorMove,
@@ -88,7 +85,6 @@ export function TaskComposerPlanEditor({
   onBatchDelay,
   onUpdateInspector,
   onDeleteMilestones,
-  onSubmit,
 }: {
   state: TaskComposerSeed;
   globalMarkers: GlobalTimeMarkerDto[];
@@ -98,9 +94,6 @@ export function TaskComposerPlanEditor({
   notice: { message: string; error: boolean } | null;
   optionLoading: boolean;
   submitting: boolean;
-  submitDisabled?: boolean;
-  submitLabel: string;
-  submittingLabel: string;
   onSelect: (entityId: string | null) => void;
   onBeginMilestone: (at: string, source?: TaskComposerMilestone) => void;
   onConstrainAnchorMove: (
@@ -118,7 +111,6 @@ export function TaskComposerPlanEditor({
   ) => ComposerPlanTimeMutationResult;
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
   onDeleteMilestones: (ids: string[]) => void;
-  onSubmit: () => void;
 }) {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
@@ -337,7 +329,7 @@ export function TaskComposerPlanEditor({
           </div>
 
           <div
-            className="mt-3 hidden flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground lg:flex"
+            className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
             data-testid="task-composer-anchor-multi-selection"
           >
             <Badge variant="outline">已选 {activeSelectedAnchorIds.size} 个可编辑节点</Badge>
@@ -346,7 +338,7 @@ export function TaskComposerPlanEditor({
 
           <div
             ref={canvasContainerRef}
-            className="mt-4 hidden min-w-0 overflow-hidden rounded-lg border border-border lg:block"
+            className="mt-4 min-w-0 overflow-hidden rounded-lg border border-border"
           >
             <TimeCanvas
               mode="TASK_COMPOSER"
@@ -487,27 +479,6 @@ export function TaskComposerPlanEditor({
           />
         </div>
       </aside>
-
-      <div className="sticky bottom-0 z-20 col-span-full flex gap-2 border-t border-border bg-background/95 p-3 backdrop-blur lg:hidden">
-        <Button
-          type="button"
-          variant="outline"
-          className="flex-1"
-          disabled={state.milestones.length >= 200}
-          onClick={() => onBeginMilestone(suggestMilestoneAt(state))}
-        >
-          <Plus aria-hidden="true" />
-          Milestone
-        </Button>
-        <Button
-          type="button"
-          className="flex-1"
-          disabled={submitting || submitDisabled}
-          onClick={onSubmit}
-        >
-          {submitting ? submittingLabel : submitLabel}
-        </Button>
-      </div>
 
       <Dialog
         open={Boolean(batchDelay)}

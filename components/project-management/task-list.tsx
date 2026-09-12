@@ -8,7 +8,7 @@ import { formatDateTime, taskPriorityLabels, taskStatusLabels } from "@/lib/proj
 import type { TaskListItem } from "@/lib/project-management/queries/task-queries";
 import { routes } from "@/lib/routes";
 
-const columns = "lg:grid-cols-[minmax(19rem,2.6fr)_7rem_6.5rem_minmax(7rem,1fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_8rem]";
+const columns = "grid-cols-[minmax(19rem,2.6fr)_7rem_6.5rem_minmax(7rem,1fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_8rem]";
 
 const statusClass: Record<string, string> = {
   ACTIVE: "border-blue-200 bg-blue-50 text-blue-700",
@@ -29,8 +29,8 @@ const priorityClass: Record<string, string> = {
 export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
   if (tasks.length === 0) return <div className="rounded-2xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">当前没有可见任务。</div>;
   return (
-    <section aria-label="任务列表" className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-card shadow-sm">
-      <div aria-hidden="true" className={`hidden gap-4 bg-slate-50/80 px-5 py-3 text-xs font-medium text-slate-500 lg:grid ${columns}`}>
+    <section aria-label="任务列表" className="min-w-0 overflow-x-auto rounded-2xl border border-slate-200 bg-card shadow-sm">
+      <div aria-hidden="true" className={`grid gap-4 bg-slate-50/80 px-5 py-3 text-xs font-medium text-slate-500 ${columns}`}>
         <span>任务信息</span><span>状态</span><span>优先级</span><span>负责人</span><span>当前节点</span><span>计划时间</span><span>操作</span>
       </div>
       {tasks.map((task) => {
@@ -38,9 +38,9 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
         const node = task.activeMilestone?.goal ?? task.activeTermination?.name ?? "暂无进行中的节点";
         const plannedAt = task.activeMilestone?.expectedCompletedAt ?? task.activeTermination?.plannedAt;
         return (
-          <article key={task.id} data-testid={`task-list-item-${task.id}`} className={`grid min-w-0 gap-3 border-t border-slate-100 px-5 py-4 text-sm first:border-t-0 lg:items-center lg:gap-4 ${columns}`}>
+          <article key={task.id} data-testid={`task-list-item-${task.id}`} className={`grid min-w-0 gap-4 items-center border-t border-slate-100 px-5 py-4 text-sm first:border-t-0 ${columns}`}>
             <div className="flex min-w-0 items-start gap-3">
-              <div className="hidden size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-lg font-semibold text-primary sm:flex">{task.title.slice(0, 1)}</div>
+              <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-lg font-semibold text-primary">{task.title.slice(0, 1)}</div>
               <div className="min-w-0">
                 <Link href={routes.progress.taskDetail(task.id)} className="block truncate text-[15px] font-semibold text-foreground hover:text-primary hover:underline">{task.title}</Link>
                 <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">

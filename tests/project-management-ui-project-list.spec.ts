@@ -45,7 +45,7 @@ test("项目行内任务紧急优先、最多两行，弹层与长名称提示�
   await expect(page.getByRole("tooltip")).toContainText(fixture.overdue.title);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("tooltip")).toBeHidden();
-  if (testInfo.project.name === "desktop") {
+  {
     await overdueChip.hover();
     await expect(page.getByRole("tooltip")).toContainText(fixture.overdue.title);
     await page.keyboard.press("Escape");
@@ -209,7 +209,7 @@ test("六个项目的总览视觉验收保留独立项目行和紧凑任务摘�
   await expect.poll(() => list.getByTestId("task-chip-state").evaluateAll((elements) => elements.every((element) => element.scrollWidth <= element.clientWidth))).toBe(true);
   await expectHealthyPage(page);
   await page.screenshot({ path: testInfo.outputPath("project-list-six-projects.png"), fullPage: true, animations: "disabled" });
-  if (testInfo.project.name === "desktop") {
+  {
     await list.evaluate((element) => { element.style.containerType = "normal"; });
     await expect(page.getByText("任务概览", { exact: true })).toBeVisible();
     for (const row of await list.getByRole("article").all()) expect((await row.boundingBox())!.height).toBeLessThanOrEqual(160);

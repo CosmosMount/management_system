@@ -109,5 +109,5 @@
 - 不可逆 Task migration 之前另有数据库级只读管理员门禁和永久串行延迟约束；已有 Task 但没有活跃且飞书可达的全局管理员时，必须在任何 schema 或数据改写前失败，并防止部署中断、空库首条 Task 或旧实例并发写入使已通过的检查失效。
 - 在隔离 PostgreSQL 中验证旧角色归一化、多 Owner、重复成员、Segment 回填、旧项目角色撤销、策略审计和零通知副作用。
 - 运行待审批修复脚本的 dry-run，再在通知禁发环境以 `--apply` 参数执行并验证幂等。
-- 授权、生命周期、Segment、通知、桌面和 Pixel 5 Playwright 回归必须覆盖允许与拒绝路径。
+- 授权、生命周期、Segment、通知、统一界面 Playwright 回归必须覆盖允许与拒绝路径。
 - 发布门禁为 `npm run check`、`npm run db:deploy`、`npm run build` 和 `npm run test:e2e`。

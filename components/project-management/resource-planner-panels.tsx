@@ -169,7 +169,6 @@ export function SegmentInspector({
           selection={{ kind: "SEGMENT", id: detail.id }}
           display={{ showBusy: true, showInspector: false }}
           interaction={editable && !disabled ? {
-            desktopOnlySegmentTransform: true,
             onSegmentTransform: (request) => {
               if (request.segmentId !== detail.id) return;
               onRangeChange({ startMs: request.startMs, endMs: request.endMs });

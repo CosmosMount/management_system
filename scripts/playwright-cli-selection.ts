@@ -1,7 +1,6 @@
 export const PLAYWRIGHT_PROJECT_NAMES = [
   "node-db",
   "desktop",
-  "mobile",
 ] as const;
 
 export type PlaywrightTopologySelectionMode = "full" | "partial";

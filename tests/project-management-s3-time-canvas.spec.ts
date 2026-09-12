@@ -800,7 +800,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     const identity = await createCanvasBrowserIdentity();
     await loginAsTestUser(context, baseURL, identity);
     const browserErrors: string[] = [];
@@ -832,19 +832,14 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     }
 
     await page.goto(
-      `/progress/time-canvas-fixtures?mode=TASK_COMPOSER${
-        testInfo.project.name === "mobile" ? "&scale=week" : ""
-      }`,
+      "/progress/time-canvas-fixtures?mode=TASK_COMPOSER",
     );
     {
       await expect(
         page.getByTestId("phase-bands-plan:fixture-composer"),
       ).toBeVisible();
-      if (testInfo.project.name === "desktop") {
+      {
         await expect(page.locator("[data-canvas-object]")).toHaveCount(200);
-      } else {
-        await expect.poll(() => page.locator("[data-canvas-object]").count()).toBeGreaterThan(0);
-        expect(await page.locator("[data-canvas-object]").count()).toBeLessThan(200);
       }
       expect(
         await page.getByTestId("timeline-row-plan:fixture-composer").evaluate((row) => {
@@ -882,7 +877,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     await page.goto(
       "/progress/time-canvas-fixtures?mode=TASK_WORKBENCH",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       await expect(
         page.getByTestId("milestone-marker-workbench-node-0"),
       ).toHaveAttribute("data-anchor-icon", "CHECK");

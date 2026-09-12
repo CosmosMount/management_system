@@ -112,7 +112,7 @@ export function AccountsAndRolesCard({
             </div>
           ) : (
             <>
-              <div className="hidden min-w-0 md:block">
+              <div className="min-w-0">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -158,31 +158,7 @@ export function AccountsAndRolesCard({
                   </TableBody>
                 </Table>
               </div>
-              <div className="grid min-w-0 gap-3 md:hidden" data-testid="mobile-account-list">
-                {accounts.map((account) => (
-                  <section key={account.id} className="min-w-0 space-y-3 rounded-xl border p-4">
-                    <AccountIdentity account={account} />
-                    <p className="text-xs text-muted-foreground">
-                      入库时间：{new Date(account.createdAt).toLocaleString("zh-CN")}
-                    </p>
-                    <InlineAccountRoles
-                      account={account}
-                      pending={pending}
-                      run={run}
-                      onResponsibilityRemove={onResponsibilityRemove}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => onShowHistory(account.id)}
-                    >
-                      <History className="mr-1 h-4 w-4" />查看记录
-                    </Button>
-                  </section>
-                ))}
-              </div>
+
               <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
                 <span>
                   共 {total} 个账号，第 {page}/{pageCount} 页
@@ -400,7 +376,7 @@ function RoleScopeSelect({
   const teamScoped = role === "TEAM_ADMIN" || role === "FINANCE";
   const techGroupScoped = role === "TECH_GROUP_ADMIN" || role === "TEACHER";
   if (!teamScoped && !techGroupScoped) {
-    return <div className="hidden h-[3.25rem] sm:block" aria-hidden="true" />;
+    return <div className="h-[3.25rem]" aria-hidden="true" />;
   }
   const options = teamScoped ? TEAM_OPTIONS : TECH_GROUP_OPTIONS;
   const label = teamScoped ? "车组" : "技术组";
