@@ -15,6 +15,7 @@ export const canvasTaskAuthorizationSelect = {
 
 export const canvasRowTaskSelect = {
   ...canvasTaskAuthorizationSelect,
+  project: { where: { deletedAt: null }, select: { id: true, name: true } },
   title: true,
   createdAt: true,
 } satisfies Prisma.TaskSelect;

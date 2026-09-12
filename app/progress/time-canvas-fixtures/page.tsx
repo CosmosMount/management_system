@@ -1,9 +1,11 @@
 import { notFound } from "next/navigation";
 import {
   createEmptyTimeCanvasFixture,
+  createRowHeaderTimeCanvasFixture,
   createTimeCanvasFixture,
 } from "@/components/project-management/time-canvas/fixtures";
 import { ObservedTimeCanvasFixture } from "@/components/project-management/time-canvas/observed-fixture";
+import { RowHeaderTimeCanvasFixture } from "@/components/project-management/time-canvas/row-header-fixture";
 import { DAY_MS } from "@/components/project-management/time-canvas/time-math";
 import type {
   TimeCanvasMode,
@@ -64,11 +66,15 @@ export default async function TimeCanvasFixturePage({
       />
       <main className="mx-auto w-full min-w-0 max-w-[96rem] px-4 py-6 sm:px-6 lg:px-8">
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
-          <ObservedTimeCanvasFixture
-            mode={mode}
-            model={model}
-            initialZoom={initialZoom}
-          />
+          {single(params.rowHeaders) === "1" ? (
+            <RowHeaderTimeCanvasFixture model={createRowHeaderTimeCanvasFixture()} />
+          ) : (
+            <ObservedTimeCanvasFixture
+              mode={mode}
+              model={model}
+              initialZoom={initialZoom}
+            />
+          )}
         </div>
       </main>
     </>

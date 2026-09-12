@@ -34,6 +34,7 @@ export function timeCanvasDataToModel(
     sourceId: row.id,
     kind: row.kind,
     label: row.label,
+    project: row.kind === "TASK" ? row.project : undefined,
     sublabel: row.sublabel?.split(" / ").map((value) => rowSublabelLabels[value] ?? value).join(" / ") ?? null,
     href:
       row.kind === "TASK"
@@ -77,6 +78,7 @@ export function timeCanvasDataToModel(
           sourceId: task.id,
           kind: "PLAN",
           label: task.title,
+          project: task.project,
           sublabel: `计划轨道 · ${taskStatusLabels[task.status]}`,
           href: routes.progress.taskDetail(task.id),
           editable: canEditDraftPlan,

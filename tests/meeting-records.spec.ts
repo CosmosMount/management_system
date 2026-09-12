@@ -30,6 +30,9 @@ test("会议展示配置只读、动态展开项目、任务迁移及删除兼�
   const query = { kind: "SAVED", meetingId: created.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
   const emptyPlan = await getMeetingTimeline(actor(viewer), query);
   expect(emptyPlan.anchors.map((anchor) => anchor.id)).toEqual([task.taskId]);
+  expect(emptyPlan.anchors[0]).toMatchObject({ title: "会议展示任务", project: { id: project.id, name: project.name } });
+  const preview = await getMeetingTimeline(actor(admin, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]), { kind: "PREVIEW", personIds: input.personIds, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd, timelineDisplay });
+  expect(preview.anchors[0]).toMatchObject({ title: "会议展示任务", project: { id: project.id, name: project.name } });
   expect(emptyPlan.segments).toEqual([]);
   const segment = await createSegment({ accountId: viewer.account.id, personId: viewer.person.id, taskId: task.taskId, startAt: atHour(9), endAt: atHour(10), content: "额外工作人员" });
   await prisma.person.update({ where: { id: viewer.person.id }, data: { status: "INACTIVE" } });
@@ -41,7 +44,9 @@ test("会议展示配置只读、动态展开项目、任务迁移及删除兼�
   expect((await getMeetingTimeline(actor(participant), query)).rowPageKey).toBe(current.rowPageKey);
   expect((await getMeeting({ meetingId: created.id })).participants.map((person) => person.id)).toEqual([participant.person.id]);
   await prisma.task.update({ where: { id: task.taskId }, data: { projectId: null } });
-  expect((await getMeetingTimeline(actor(admin), query)).anchors).toHaveLength(1);
+  const detached = await getMeetingTimeline(actor(admin), query);
+  expect(detached.anchors).toHaveLength(1);
+  expect(detached.anchors[0]).toMatchObject({ title: "会议展示任务", project: null });
   const extra = await createTask({ ownerAccountId: admin.account.id, title: "动态加入任务", team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
   await prisma.task.update({ where: { id: extra.taskId }, data: { projectId: project.id } });
   expect((await getMeetingTimeline(actor(admin), query)).anchors).toHaveLength(2);

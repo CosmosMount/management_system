@@ -134,9 +134,15 @@ export const personTimeCanvasRowDtoSchema = z
   })
   .strict();
 
+const timeCanvasProjectDtoSchema = z.object({
+  id: dtoIdSchema,
+  name: z.string().trim().min(1),
+}).strict();
+
 export const taskTimeCanvasRowDtoSchema = z
   .object({
     kind: z.literal(taskTimeCanvasGrouping),
+    project: timeCanvasProjectDtoSchema.nullish(),
     ...timeCanvasRowFields,
   })
   .strict();
@@ -181,6 +187,7 @@ export const timeCanvasTaskAnchorDtoSchema = z
     currentNodeDeadline: currentNodeDeadlineDtoSchema.nullable(),
     id: dtoIdSchema,
     title: z.string().trim().min(1),
+    project: timeCanvasProjectDtoSchema.nullish(),
     status: taskStatusSchema,
     priority: taskPrioritySchema,
     createdAt: dtoAbsoluteDateTimeSchema,

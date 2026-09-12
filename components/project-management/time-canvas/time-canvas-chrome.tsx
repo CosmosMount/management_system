@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { routes } from "@/lib/routes";
 import { forwardRef } from "react";
 import { Lock } from "lucide-react";
 import { createTimeScale, timeToX } from "@/components/project-management/time-canvas/time-math";
@@ -181,12 +182,30 @@ export function RowHeader({
   row: TimeCanvasRow;
   onNavigate?: (row: TimeCanvasRow) => boolean;
 }) {
+  const project = row.kind === "PERSON" ? null : row.project;
+  const projectHref = project ? routes.progress.projectDetail(project.id) : undefined;
   return (
     <div
       className="sticky left-0 z-[25] flex min-w-0 flex-col justify-center border-r border-border bg-card px-3"
       data-testid={`time-canvas-row-header-${row.id}`}
     >
       <div className="flex min-w-0 items-center gap-2">
+        {project && projectHref && (
+          <>
+            <Link
+              href={projectHref}
+              prefetch={false}
+              className="min-w-0 max-w-[45%] truncate rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={project.name}
+              onClick={(event) => {
+                if (onNavigate?.({ ...row, href: projectHref }) === false) event.preventDefault();
+              }}
+            >
+              {project.name}
+            </Link>
+            <span className="shrink-0 text-sm text-muted-foreground" aria-hidden="true">/</span>
+          </>
+        )}
         {row.href ? (
           <Link
             href={row.href}

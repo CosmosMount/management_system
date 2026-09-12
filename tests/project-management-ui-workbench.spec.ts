@@ -309,7 +309,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     );
     await expect(firstHistoryHeader).toContainText("计划 v1");
     await expect(firstHistoryHeader.getByLabel("只读")).toBeVisible();
-    await expect(firstHistoryHeader.getByRole("link")).toHaveCount(0);
+    await expect(firstHistoryHeader.getByRole("link")).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     const firstHistoryRow = page.getByTestId(
       `timeline-row-history-plan:${firstRevision.revisionNodeId}`,
     );
@@ -682,7 +682,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const candidateHeader = page.getByTestId(candidateHeaderTestId);
     const candidateRow = page.getByTestId(candidateRowTestId);
     await expect(currentHeader).toBeVisible();
-    await expect(candidateHeader.getByRole("link")).toHaveCount(0);
+    await expect(candidateHeader.getByRole("link")).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     await expect(candidateHeader).toContainText(
       `计划修订「${revisionReason}」修改后`,
     );
@@ -1171,6 +1171,16 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expect(emptyMaterials.getByRole("list")).toHaveCount(0);
     await expectHealthyPage(page);
     expect(pageErrors).toEqual([]);
+  });
+
+  test("draft editor timeline header links to the persisted task", async ({ context, page, baseURL }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, { openId: fixture.owner.openId, name: fixture.owner.person.displayName });
+    await page.goto(`/progress/tasks/${fixture.taskId}/edit`);
+    const header = page.getByTestId("time-canvas-row-header-task-composer-plan-row");
+    await expect(header.getByRole("link", { name: fixture.taskTitle, exact: true })).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
+    await expect(header.getByRole("link")).toHaveCount(1);
+    await expectHealthyPage(page);
   });
 
   test("Task workbench uses the unified Draft editor and locks it after activation", async ({

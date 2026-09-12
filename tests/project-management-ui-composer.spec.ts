@@ -16,6 +16,36 @@ import {
 } from "./helpers/project-management-ui-fixtures";
 
 test.describe("project management UI project-management-ui-composer", () => {
+  test("composer timeline follows project selection and protects unsaved navigation", async ({ context, page, baseURL }) => {
+    const creator = await createAccountPerson(`时间线创建者 ${randomUUID()}`);
+    const initialProject = await prisma.project.create({
+      data: { name: `初始表头项目 ${randomUUID()}`, description: "", requesterAccountId: creator.account.id, status: "ACTIVE" },
+    });
+    await loginAsTestUser(context, baseURL, { openId: creator.openId, name: creator.person.displayName });
+    await page.goto(`/progress/tasks/new?projectId=${initialProject.id}`);
+    const header = page.getByTestId("time-canvas-row-header-task-composer-plan-row");
+    await expect(header.getByRole("link", { name: initialProject.name, exact: true })).toHaveAttribute("href", `/progress/projects/${initialProject.id}`);
+    await page.getByLabel("Task 名称").fill("尚未保存的表头任务");
+    await expect(header).toContainText("尚未保存的表头任务");
+    await expect(header.getByRole("link")).toHaveCount(1);
+    const nextProject = await prisma.project.create({
+      data: { name: `异步表头项目 ${randomUUID()}`, description: "", requesterAccountId: creator.account.id, status: "ACTIVE" },
+    });
+    const picker = page.getByRole("combobox", { name: "选择所属项目", exact: true });
+    await picker.fill(nextProject.name);
+    await page.getByRole("option", { name: new RegExp(nextProject.name) }).click();
+    const projectLink = header.getByRole("link", { name: nextProject.name, exact: true });
+    await expect(projectLink).toHaveAttribute("href", `/progress/projects/${nextProject.id}`);
+    await projectLink.click();
+    await expect(page.getByRole("dialog", { name: "离开 Task Composer？" })).toBeVisible();
+    await page.getByRole("button", { name: "继续编辑", exact: true }).click();
+    await expect(page.getByLabel("Task 名称")).toHaveValue("尚未保存的表头任务");
+    await page.getByRole("button", { name: "清空选择所属项目", exact: true }).click();
+    await expect(header.getByRole("link")).toHaveCount(0);
+    await expect(header).not.toContainText("/");
+    await expectHealthyPage(page);
+  });
+
   test.beforeAll(async () => {
       const administrator = await createAccountPerson(
         `S5 UI Global Approval Administrator ${randomUUID()}`,

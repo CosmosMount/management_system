@@ -80,12 +80,8 @@ export async function getMeetingTimeline(actor: ProjectManagementActor, input: u
     label: `${person.displayName}${person.status === "INACTIVE" ? "（已停用）" : ""}`,
     sublabel: null, capabilities: { canCreateSegment: false },
   }));
-  const taskTitles = new Map(display.tasks.map((task) => [task.id,
-    [task.project?.deletedAt === null ? task.project.name : null, task.title].filter(Boolean).join(" / "),
-  ]));
   const anchors = loadedAnchors.map((task) => ({
     ...task,
-    title: taskTitles.get(task.id) ?? task.title,
     capabilities: {
       canView: true, canUpdateMetadata: false, canManageMembers: false,
       canActivate: false, canArchive: false, canCreateRevision: false,

@@ -283,6 +283,7 @@ export default async function ProjectDetailPage({
 
         <ProjectDetailWorkspace
           projectId={project.id}
+          projectName={project.name}
           projectStatus={project.status}
           canCreateTask={actor.isActive !== false}
           tasks={project.tasks}

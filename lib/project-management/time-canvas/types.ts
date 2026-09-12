@@ -34,6 +34,7 @@ export type TimeCanvasRow = {
   label: string;
   sublabel: string | null;
   href?: string;
+  project?: { id: string; name: string } | null;
   editable: boolean;
   height: number;
   capacity: number | null;

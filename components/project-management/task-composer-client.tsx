@@ -1115,6 +1115,8 @@ export function TaskComposerClient({
 
         <TaskComposerPlanEditor
           state={state}
+          taskId={mode.kind === "CREATE" ? undefined : mode.taskId}
+          initialProject={initialProjects.find((project) => project.id === state.projectId)}
           globalMarkers={initialGlobalMarkers}
           issues={issues}
           inspectorDraft={inspectorDraft}

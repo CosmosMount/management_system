@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { resolveVisibleProjectOptions } from "@/app/actions/project-management/projects";
+import { routes } from "@/lib/routes";
 import {
   CalendarClock,
   Plus,
@@ -70,6 +72,8 @@ const phaseTones: TimeCanvasTone[] = [
 
 export function TaskComposerPlanEditor({
   state,
+  taskId,
+  initialProject,
   globalMarkers,
   issues,
   inspectorDraft,
@@ -87,6 +91,8 @@ export function TaskComposerPlanEditor({
   onDeleteMilestones,
 }: {
   state: TaskComposerSeed;
+  taskId?: string;
+  initialProject?: { id: string; name: string };
   globalMarkers: GlobalTimeMarkerDto[];
   issues: ValidationIssue[];
   inspectorDraft: TaskComposerInspectorDraft | null;
@@ -112,6 +118,25 @@ export function TaskComposerPlanEditor({
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
   onDeleteMilestones: (ids: string[]) => void;
 }) {
+  const [resolvedProject, setResolvedProject] = useState<{ id: string; name: string } | null>(null);
+  const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
+  const project = initialProject?.id === state.projectId
+    ? initialProject
+    : resolvedProject?.id === state.projectId ? resolvedProject : null;
+  useEffect(() => {
+    const projectId = state.projectId;
+    if (!projectId || initialProject?.id === projectId) return;
+    let cancelled = false;
+    void resolveVisibleProjectOptions({ ids: [projectId] }).then((result) => {
+      if (cancelled) return;
+      const option = result.ok ? result.data.find((item) => item.id === projectId) : null;
+      setResolvedProject(option ? { id: option.id, name: option.name } : null);
+      setProjectLoadError(option ? null : projectId);
+    }).catch(() => {
+      if (!cancelled) setProjectLoadError(projectId);
+    });
+    return () => { cancelled = true; };
+  }, [initialProject?.id, state.projectId]);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
   const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(
@@ -149,8 +174,10 @@ export function TaskComposerPlanEditor({
         issues,
         globalMarkers,
         requestedCanvasCenter?.atMs ?? planCenterMs,
+        project,
+        taskId,
       ),
-    [globalMarkers, issues, planCenterMs, requestedCanvasCenter?.atMs, state],
+    [globalMarkers, issues, planCenterMs, requestedCanvasCenter?.atMs, state, project, taskId],
   );
   const navigatorNodes = useMemo(
     () => buildComposerNavigatorNodes(state, issues),
@@ -378,6 +405,9 @@ export function TaskComposerPlanEditor({
                 onInvalidDrop: (message) => window.alert(message),
               }}
             />
+            {state.projectId && projectLoadError === state.projectId && !project && (
+              <p role="status" className="p-2 text-sm text-destructive">所属项目名称暂不可用，请刷新后重试。</p>
+            )}
           </div>
 
           {quickAt && quickAtLocal && (
@@ -537,6 +567,8 @@ function buildComposerCanvasModel(
   issues: ValidationIssue[],
   globalMarkerDtos: GlobalTimeMarkerDto[],
   preferredCenterMs: number,
+  project: { id: string; name: string } | null | undefined,
+  taskId?: string,
 ): TimeCanvasModel {
   const sortedMilestones = sortMilestonesByRenderTime(state);
   const hasIssue = (entityId: string) => issues.some((issue) => issue.entityId === entityId);
@@ -667,6 +699,8 @@ function buildComposerCanvasModel(
       sourceId: state.draftId,
       kind: "PLAN",
       label: state.title || "新建 Task",
+      project,
+      href: taskId ? routes.progress.taskDetail(taskId) : undefined,
       sublabel: `${state.milestones.length} 个 Milestone${state.milestones.some((milestone) => isTemporary(state, milestone.id)) ? " · 含临时节点" : ""}`,
       editable: true,
       height: 132,

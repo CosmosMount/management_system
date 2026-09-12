@@ -6,6 +6,32 @@ import { createMeeting } from "../lib/project-management/meetings/service";
 import { actor, atHour, createAccountPerson, createSegment, createTask } from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
+test("会议时间线项目名称只展示一次并保留独立任务链接", async ({ page, context, baseURL }) => {
+  const admin = await createAccountPerson(`会议表头超管 ${randomUUID()}`);
+  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
+  const project = await prisma.project.create({ data: { name: `会议表头项目 ${randomUUID()}`, description: "", requesterAccountId: admin.account.id } });
+  const taskTitle = "会议表头任务";
+  const task = await createTask({ ownerAccountId: admin.account.id, title: taskTitle, team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
+  await prisma.task.update({ where: { id: task.taskId }, data: { projectId: project.id } });
+  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "会议表头回归", personIds: [admin.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "", timelineDisplay: { projectIds: [project.id], taskIds: [task.taskId] } });
+  await loginAsTestUser(context, baseURL, { openId: admin.openId, name: admin.person.displayName });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`/progress/meetings/${meeting.id}`);
+  const header = page.getByTestId(`time-canvas-row-header-plan:${task.taskId}`);
+  await expect(header.getByRole("link", { name: project.name, exact: true })).toHaveAttribute("href", `/progress/projects/${project.id}`);
+  await expect(header.getByRole("link", { name: taskTitle, exact: true })).toHaveAttribute("href", `/progress/tasks/${task.taskId}`);
+  expect((await header.innerText()).split(project.name)).toHaveLength(2);
+  await expect(header.getByRole("link")).toHaveCount(2);
+  await prisma.task.update({ where: { id: task.taskId }, data: { projectId: null } });
+  await page.getByRole("button", { name: "刷新时间线", exact: true }).click();
+  await expect(header.getByRole("link")).toHaveCount(1);
+  await expect(header.getByRole("link", { name: taskTitle, exact: true })).toHaveAttribute("href", `/progress/tasks/${task.taskId}`);
+  await expect(header).not.toContainText(project.name);
+  await expectHealthyPage(page);
+  expect(errors).toEqual([]);
+});
+
 test("完整会议时间范围直接加载，现有滑块可浏览第31天之后的工作", async ({ page, context, baseURL }) => {
   if (!baseURL) throw new Error("会议测试缺少隔离服务地址");
   const admin = await createAccountPerson(`会议全范围超管 ${randomUUID()}`);

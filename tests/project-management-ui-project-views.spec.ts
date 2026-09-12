@@ -135,6 +135,9 @@ test("Project unified workbench preserves risk and comment drafts during timelin
   await expect(commentInput).toHaveValue(commentDraft);
   await taskCheckbox.check();
   await expect(page.getByTestId(`timeline-row-project-plan:${fixture.taskId}`)).toBeVisible();
+  const taskHeader = page.getByTestId(`time-canvas-row-header-project-plan:${fixture.taskId}`);
+  await expect(taskHeader.getByRole("link", { name: projectName, exact: true })).toHaveAttribute("href", `/progress/projects/${project.projectId}`);
+  await expect(taskHeader.getByRole("link", { name: "整机联调与验收证据整理", exact: true })).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
   await page.getByRole("button", { name: "在时间线中定位 整机联调与验收证据整理", exact: true }).click();
   await expect(page.getByTestId("project-timeline-layer")).toBeInViewport();
   await expect(riskInput).toHaveValue(riskDraft);

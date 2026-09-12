@@ -82,6 +82,7 @@ const phaseTones: TimeCanvasTone[] = [
 
 export function ProjectDetailWorkspace({
   projectId,
+  projectName,
   projectStatus,
   canCreateTask,
   tasks,
@@ -96,6 +97,7 @@ export function ProjectDetailWorkspace({
   collaboration,
 }: {
   projectId: string;
+  projectName: string;
   projectStatus: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "COMPLETED";
   canCreateTask: boolean;
   tasks: ProjectTimelineTask[];
@@ -143,8 +145,8 @@ export function ProjectDetailWorkspace({
     [taskGroups, visibleTaskIdSet],
   );
   const model = useMemo(
-    () => mergeProjectTimelineModel(visibleTasks, resourceModel),
-    [resourceModel, visibleTasks],
+    () => mergeProjectTimelineModel(visibleTasks, resourceModel, { id: projectId, name: projectName }),
+    [resourceModel, visibleTasks, projectId, projectName],
   );
   const [requestedAnchorId, setRequestedAnchorId] = useState<string | null>(timelineWindow.focusId);
   const externalTimelineFocusRef = useRef(timelineWindow.focusId);
@@ -619,8 +621,9 @@ function taskForTimelineFocus(
 function mergeProjectTimelineModel(
   tasks: ProjectTimelineTask[],
   resourceModel: TimeCanvasModel | null,
+  project: { id: string; name: string },
 ) {
-  const planModel = buildProjectTimelineModel(tasks);
+  const planModel = buildProjectTimelineModel(tasks, project);
   return {
     ...planModel,
     range: resourceModel?.range ?? planModel.range,
@@ -643,12 +646,13 @@ function mergeProjectTimelineModel(
   };
 }
 
-function buildProjectTimelineModel(tasks: ProjectTimelineTask[]): TimeCanvasModel {
+function buildProjectTimelineModel(tasks: ProjectTimelineTask[], project: { id: string; name: string }): TimeCanvasModel {
   const rows = tasks.map((task) => ({
     id: `project-plan:${task.id}`,
     sourceId: task.id,
     kind: "PLAN" as const,
     label: task.title,
+    project,
     sublabel: `当前计划 v${task.currentPlan.versionNo} · ${taskStatusLabels[task.status]}`,
     href: routes.progress.taskDetail(task.id),
     editable: false,
