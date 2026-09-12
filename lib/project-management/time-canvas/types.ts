@@ -1,5 +1,6 @@
 import type { ResourcePlanTaskStatus } from "@/lib/project-management/resource-plan-url";
 import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import type { ReactNode } from "react";
 
 export type TimeCanvasMode =
   | "TASK_COMPOSER"
@@ -280,4 +281,6 @@ export type TimeCanvasProps = {
   ) => void;
   onZoomChange?: (zoom: TimeCanvasZoom) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;
+  toolbarAction?: ReactNode;
+  highlightedRange?: TimeCanvasRange;
 };

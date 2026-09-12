@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useTransition,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import { useDetailViewActive } from "@/components/project-management/detail-views";
@@ -109,6 +110,8 @@ export function ResourcePlannerCanvasClient({
   persistViewportInUrl = false,
   adaptiveBlockQuery,
   presentationOverlay,
+  toolbarAction,
+  highlightedRange,
 }: {
   initialModel: TimeCanvasModel;
   peopleOptions: PersonOptionDto[];
@@ -130,6 +133,8 @@ export function ResourcePlannerCanvasClient({
   persistViewportInUrl?: boolean;
   adaptiveBlockQuery?: AdaptiveTimeCanvasBlockQuery;
   presentationOverlay?: TimeCanvasPresentationOverlay;
+  toolbarAction?: ReactNode;
+  highlightedRange?: TimeCanvasRange;
 }) {
   const router = useRouter();
   const viewActive = useDetailViewActive();
@@ -1602,6 +1607,8 @@ export function ResourcePlannerCanvasClient({
           ? requestContentCenter
           : undefined,
         emptyMessage: "当前筛选和时间范围内没有可见安排。",
+        toolbarAction,
+        highlightedRange,
       }}
       segmentDialog={{
         open: Boolean(openSegmentId),

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { routes } from "@/lib/routes";
 import { forwardRef } from "react";
+import type { ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { createTimeScale, timeToX } from "@/components/project-management/time-canvas/time-math";
 import type {
@@ -34,16 +35,20 @@ export function TimeCanvasToolbar({
   canGoToday,
   onToday,
   onZoomChange,
+  action,
 }: {
   presentation: TimeCanvasProps["presentation"];
   zoom: TimeCanvasZoom;
   canGoToday: boolean;
   onToday: () => void;
   onZoomChange: (zoom: TimeCanvasZoom) => void;
+  action?: ReactNode;
 }) {
   if (presentation === "COMPACT") return null;
   return (
-    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-end gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
+    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
+      {action}
+      <div className="ml-auto flex items-center gap-2">
       <div className="flex items-center overflow-hidden rounded-md border border-border" aria-label="显示尺度">
         {zoomOrder.map((item) => (
           <Button
@@ -75,6 +80,7 @@ export function TimeCanvasToolbar({
           今天
         </Button>
       </span>
+      </div>
     </div>
   );
 }

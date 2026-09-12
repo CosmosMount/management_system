@@ -25,8 +25,10 @@ export function MeetingForm({ meeting }: { meeting?: MeetingDto }) {
   const [pending, startTransition] = useTransition();
   const [topic, setTopic] = useState(meeting?.topic ?? "");
   const [personIds, setPersonIds] = useState(meeting?.participants.map((person) => person.id) ?? []);
-  const [rangeStart, setRangeStart] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeStart) : "");
-  const [rangeEnd, setRangeEnd] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeEnd) : "");
+  const defaultRangeEnd = new Date();
+  const defaultRangeStart = new Date(defaultRangeEnd.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const [rangeStart, setRangeStart] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeStart) : isoToShanghaiDateTimeLocal(defaultRangeStart.toISOString()));
+  const [rangeEnd, setRangeEnd] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeEnd) : isoToShanghaiDateTimeLocal(defaultRangeEnd.toISOString()));
   const [minutes, setMinutes] = useState(meeting?.minutes ?? "");
   const [projectIds, setProjectIds] = useState(meeting?.timelineDisplay.projectIds ?? []);
   const [taskIds, setTaskIds] = useState(meeting?.timelineDisplay.taskIds ?? []);
