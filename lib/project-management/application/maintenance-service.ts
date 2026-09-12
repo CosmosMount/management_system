@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { routes } from "@/lib/routes";
+import { runAdminGlobalSummary, ensureAdminGlobalSummarySetting } from "./admin-global-summary-service";
+import { ensurePersonalSummarySetting, runPersonalSummary } from "./personal-summary-service";
+import { withProjectManagementCronLock } from "./cron-service";
+import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
@@ -13,6 +17,7 @@ export async function runMilestoneDeadlineScan(
   now = new Date(),
   batchSize = 5_000,
   requestedKind?: "milestone_due" | "milestone_overdue",
+  execution?: { key: string; actorName: string },
 ) {
   const localDate = shanghaiDate(now);
   const dayStart = shanghaiDayStart(localDate);
@@ -73,11 +78,11 @@ export async function runMilestoneDeadlineScan(
           task.members.map((member) => member.personId),
         );
         await createProjectManagementEventNotificationsTx(tx, {
-          actorName: "系统",
+          actorName: execution?.actorName ?? "系统",
           task,
           kind,
           category: "MILESTONE",
-          eventKey: `pm:milestone:${milestone.id}:${kind}:${localDate}`,
+          eventKey: `pm:milestone:${milestone.id}:${kind}:${execution?.key ?? localDate}`,
           title: overdue ? "里程碑已逾期" : "里程碑今日到期",
           summary: `${milestone.goal} · 计划完成时间 ${formatShanghaiDateTime(milestone.expectedCompletedAt)}`,
           entityType: "MilestoneNode",
@@ -220,38 +225,79 @@ export async function runConfiguredProjectManagementReminders(now = new Date()) 
   const localTime = new Intl.DateTimeFormat("en-GB", { timeZone: SHANGHAI_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
   const localDate = shanghaiDate(now);
   const settings = await ensureDefaultReminderSettings();
-  const matched = settings.filter((setting) => setting.enabled && setting.timezone === SHANGHAI_TIME_ZONE && setting.timeOfDay === localTime);
+  const matched = settings.filter((setting) => setting.enabled && setting.timezone === SHANGHAI_TIME_ZONE && setting.timeOfDay <= localTime);
   for (const setting of matched) {
-    if (setting.kind === "MILESTONE_DUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_due");
-    if (setting.kind === "MILESTONE_OVERDUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_overdue");
-    if (setting.kind === "TASK_ACTIVATION_OVERDUE") await runTaskActivationOverdueScan(now, localDate, setting.id);
-    if (setting.kind === "TASK_APPROVAL_PENDING") await runTaskApprovalPendingScan(localDate, setting.id);
+    if (setting.kind === "PERSONAL_SUMMARY") {
+      try {
+        await runPersonalSummary({ now, slotKey: `${localDate}:${setting.timeOfDay}` });
+      } catch (error) {
+        logger.error("pm.personal_summary.schedule_retry", { error, module: "project-management" });
+      }
+      continue;
+    }
+    if (setting.kind === "ADMIN_GLOBAL_SUMMARY") {
+      try {
+        await runAdminGlobalSummary({ now, slotKey: `${localDate}:${setting.timeOfDay}` });
+      } catch (error) {
+        logger.error("pm.admin_global_summary.schedule_retry", { error, module: "project-management" });
+      }
+      continue;
+    }
+    const slotKey = `scheduled:${setting.kind}:${localDate}:${setting.id}:${setting.timeOfDay}`;
+    try {
+      await withProjectManagementCronLock(`reminder:${setting.kind}`, async () => {
+        if (await prisma.domainAuditEvent.findFirst({ where: { action: "pm.reminder.executed", entityId: slotKey } })) return;
+        if (setting.kind === "MILESTONE_DUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_due", { key: slotKey, actorName: "系统" });
+        if (setting.kind === "MILESTONE_OVERDUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_overdue", { key: slotKey, actorName: "系统" });
+        if (setting.kind === "TASK_ACTIVATION_OVERDUE") await runTaskActivationOverdueScan(now, slotKey, setting.id);
+        if (setting.kind === "TASK_APPROVAL_PENDING") await runTaskApprovalPendingScan(slotKey, setting.id);
+        await prisma.$transaction((tx) => createDomainAuditEventTx(tx, {
+          actorAccountId: null, actorPersonId: null, action: "pm.reminder.executed",
+          entityType: "ProjectManagementReminderSetting", entityId: slotKey,
+          before: null, after: { kind: setting.kind, trigger: "SCHEDULED", status: "SUCCEEDED" },
+        }));
+      });
+    } catch (error) {
+      logger.error("pm.reminder.schedule_retry", { error, module: "project-management", kind: setting.kind });
+    }
   }
   return { localDate, matched: matched.length };
 }
 
 async function ensureDefaultReminderSettings() {
+  await ensureAdminGlobalSummarySetting();
+  await ensurePersonalSummarySetting();
   const defaults = [["MILESTONE_DUE", "08:15"], ["MILESTONE_OVERDUE", "08:15"], ["TASK_ACTIVATION_OVERDUE", "08:30"], ["TASK_APPROVAL_PENDING", "09:00"]] as const;
-  const existing = await prisma.projectManagementReminderSetting.findMany();
-  if (existing.length > 0) return existing;
-  const account = await prisma.account.findFirst({ where: { systemRoles: { some: { role: "SUPER_ADMINISTRATOR", revokedAt: null } } }, select: { id: true } });
-  if (!account) return existing;
-  await prisma.projectManagementReminderSetting.createMany({ data: defaults.map(([kind, timeOfDay], sortOrder) => ({ kind, timeOfDay, sortOrder, createdByAccountId: account.id, updatedByAccountId: account.id })) });
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('pm:reminders:initialize'))`;
+    if (await tx.domainAuditEvent.findFirst({ where: { action: "pm.reminders.initialized" } })) return;
+    const existing = await tx.projectManagementReminderSetting.count({ where: { kind: { in: defaults.map(([kind]) => kind) } } });
+    const edited = await tx.domainAuditEvent.findFirst({ where: { action: { in: ["pm.reminder_setting.created", "pm.reminder_setting.updated", "pm.reminder_setting.deleted"] } } });
+    if (!existing && !edited) {
+      const account = await tx.account.findFirst({ where: { person: { is: { status: "ACTIVE" } }, systemRoles: { some: { role: "SUPER_ADMINISTRATOR", team: "", techGroup: "", revokedAt: null } } }, select: { id: true } });
+      if (!account) return;
+      await tx.projectManagementReminderSetting.createMany({ skipDuplicates: true, data: defaults.map(([kind, timeOfDay], sortOrder) => ({ kind, timeOfDay, sortOrder, createdByAccountId: account.id, updatedByAccountId: account.id })) });
+    }
+    await createDomainAuditEventTx(tx, { actorAccountId: null, actorPersonId: null,
+      action: "pm.reminders.initialized", entityType: "ProjectManagementReminderSetting", entityId: "defaults",
+      before: null, after: { preservedExistingConfiguration: Boolean(existing || edited) },
+    });
+  });
   return prisma.projectManagementReminderSetting.findMany();
 }
 
-async function runTaskActivationOverdueScan(now: Date, localDate: string, scheduleId: string) {
+export async function runTaskActivationOverdueScan(now: Date, localDate: string, scheduleId: string, actorName = "系统") {
   const tasks = await prisma.task.findMany({ where: { deletedAt: null, status: "DRAFT", currentPlanVersion: { plannedStartAt: { lt: now }, status: "CURRENT" } }, select: { id: true, title: true, status: true, currentPlanVersionId: true, currentPlanVersion: { select: { plannedStartAt: true } }, members: { where: { removedAt: null }, select: { personId: true } } } });
   for (const task of tasks) await prisma.$transaction(async (tx) => {
     const recipients = await recipientsForPersonIdsTx(tx, task.members.map((member) => member.personId));
-    await createProjectManagementEventNotificationsTx(tx, { actorName: "系统", task, kind: "task_activation_overdue", category: "TASK", eventKey: `pm:task:${task.id}:activation_overdue:${localDate}:${scheduleId}`, title: "任务启动后仍未激活", summary: `任务「${task.title}」已超过计划启动时间，当前仍未激活`, entityType: "Task", entityId: task.id, linkPath: routes.progress.taskDetail(task.id), mandatory: false, recipients, context: { plannedStartAt: task.currentPlanVersion.plannedStartAt?.toISOString() ?? null, timezone: SHANGHAI_TIME_ZONE } });
+    await createProjectManagementEventNotificationsTx(tx, { actorName, task, kind: "task_activation_overdue", category: "TASK", eventKey: `pm:task:${task.id}:activation_overdue:${localDate}:${scheduleId}`, title: "任务启动后仍未激活", summary: `任务「${task.title}」已超过计划启动时间，当前仍未激活`, entityType: "Task", entityId: task.id, linkPath: routes.progress.taskDetail(task.id), mandatory: false, recipients, context: { plannedStartAt: task.currentPlanVersion.plannedStartAt?.toISOString() ?? null, timezone: SHANGHAI_TIME_ZONE } });
   });
 }
 
-async function runTaskApprovalPendingScan(localDate: string, scheduleId: string) {
+export async function runTaskApprovalPendingScan(localDate: string, scheduleId: string, actorName = "系统") {
   const tasks = await prisma.task.findMany({ where: { deletedAt: null, status: { notIn: ["COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "ARCHIVED"] }, OR: [{ nodes: { some: { deletedAt: null, milestone: { reviews: { some: { result: "PENDING", revokedAt: null } } } } } }, { nodes: { some: { deletedAt: null, revision: { status: "PENDING_APPROVAL" } } } }, { nodes: { some: { deletedAt: null, termination: { reviews: { some: { result: "PENDING" } } } } } }] }, select: { id: true, title: true, status: true, currentPlanVersionId: true, members: { where: { removedAt: null }, select: { personId: true } } } });
   for (const task of tasks) await prisma.$transaction(async (tx) => {
     const recipients = await recipientsForPersonIdsTx(tx, task.members.map((member) => member.personId));
-    await createProjectManagementEventNotificationsTx(tx, { actorName: "系统", task, kind: "task_approval_pending_daily", category: "REVIEW", eventKey: `pm:task:${task.id}:approval_pending:${localDate}:${scheduleId}`, title: "Task 审批尚未完成", summary: `任务「${task.title}」仍存在未完成的审批事项，请及时处理`, entityType: "Task", entityId: task.id, linkPath: routes.progress.taskDetail(task.id), mandatory: false, recipients, context: { timezone: SHANGHAI_TIME_ZONE } });
+    await createProjectManagementEventNotificationsTx(tx, { actorName, task, kind: "task_approval_pending_daily", category: "REVIEW", eventKey: `pm:task:${task.id}:approval_pending:${localDate}:${scheduleId}`, title: "Task 审批尚未完成", summary: `任务「${task.title}」仍存在未完成的审批事项，请及时处理`, entityType: "Task", entityId: task.id, linkPath: routes.progress.taskDetail(task.id), mandatory: false, recipients, context: { timezone: SHANGHAI_TIME_ZONE } });
   });
 }

@@ -4,8 +4,12 @@ import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import { isSystemAdministrator } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { ProjectManagementAuthorizationError } from "@/lib/project-management/authorization";
+import { ensureAdminGlobalSummarySetting } from "./admin-global-summary-service";
+import { ensurePersonalSummarySetting } from "./personal-summary-service";
 
 const reminderKindSchema = z.enum([
+  "ADMIN_GLOBAL_SUMMARY",
+  "PERSONAL_SUMMARY",
   "MILESTONE_DUE",
   "MILESTONE_OVERDUE",
   "TASK_ACTIVATION_OVERDUE",
@@ -29,6 +33,8 @@ function assertAdmin(actor: ProjectManagementActor) {
 
 export async function listReminderSettings(actor: ProjectManagementActor) {
   assertAdmin(actor);
+  await ensureAdminGlobalSummarySetting();
+  await ensurePersonalSummarySetting();
   return prisma.projectManagementReminderSetting.findMany({
     orderBy: [{ kind: "asc" }, { sortOrder: "asc" }, { timeOfDay: "asc" }],
   });

@@ -22,6 +22,9 @@ const LEGACY_FIXED_TEXT: Record<string, string> = {
 };
 
 const ENTITY_LABELS: Record<string, string> = {
+  AdminGlobalSummaryRun: "管理员全局进度总结",
+  PersonalSummary: "个人进度总结",
+  PersonalSummaryRun: "个人总结执行记录",
   Account: "账号",
   Comment: "评论",
   MilestoneNode: "里程碑",

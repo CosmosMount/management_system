@@ -185,6 +185,8 @@ enum ProjectManagementNotificationChannel {
 }
 
 enum ProjectManagementReminderKind {
+  PERSONAL_SUMMARY
+  ADMIN_GLOBAL_SUMMARY
   MILESTONE_DUE
   MILESTONE_OVERDUE
   TASK_ACTIVATION_OVERDUE
@@ -229,6 +231,8 @@ model Account {
   notificationPreferences   NotificationPreference[]
   createdReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingCreatedBy")
   updatedReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingUpdatedBy")
+  adminGlobalSummaryRuns AdminGlobalSummaryRun[]
+  personalSummaries PersonalSummary[]
   inAppNotifications        InAppNotification[]
   auditEvents               DomainAuditEvent[]            @relation("AuditActorAccount")
   requestedProjects         Project[]                     @relation("ProjectRequester")
@@ -1091,6 +1095,50 @@ model NotificationPreference {
   updatedAt DateTime                              @updatedAt @db.Timestamptz(6)
 
   @@unique([accountId, category, channel])
+}
+
+model PersonalSummaryRun {
+  id String @id @default(uuid())
+  eventKey String @unique
+  trigger String
+  status String
+  actorAccountId String?
+  startedAt DateTime @default(now()) @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  recipientCount Int @default(0)
+  errorMessage String?
+  summaries PersonalSummary[]
+
+  @@index([startedAt])
+}
+
+model PersonalSummary {
+  id String @id @default(uuid())
+  runId String
+  run PersonalSummaryRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  accountId String
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  markdown String
+  requiresApprovalAdministrator Boolean @default(false)
+
+  @@unique([runId, accountId])
+  @@index([accountId])
+}
+
+model AdminGlobalSummaryRun {
+  id String @id @default(uuid())
+  eventKey String @unique
+  trigger String
+  status String
+  actorAccountId String?
+  actor Account? @relation(fields: [actorAccountId], references: [id], onDelete: SetNull)
+  startedAt DateTime @default(now()) @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  markdown String @default("")
+  recipientCount Int @default(0)
+  errorMessage String?
+
+  @@index([startedAt])
 }
 
 model ProjectManagementReminderSetting {

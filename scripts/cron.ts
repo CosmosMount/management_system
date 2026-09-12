@@ -16,7 +16,6 @@ import {
   runLockedProjectManagementDaily,
 } from "../lib/project-management/application/cron-service";
 import {
-  runMilestoneDeadlineScan,
   runProjectManagementIntegrityScan,
   runProjectManagementNotificationRetention,
   runConfiguredProjectManagementReminders,

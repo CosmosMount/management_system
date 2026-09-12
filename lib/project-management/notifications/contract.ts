@@ -7,6 +7,8 @@ export const PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION = 1;
 export const RETIRED_SEGMENT_NOTIFICATION_KIND = "segment_confirmation_due";
 export const RETIRED_SEGMENT_NOTIFICATION_REASON = "投入确认功能已退役，取消历史提醒";
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
+  "project_management_global_summary_daily",
+  "project_management_personal_summary_daily",
   "task_assigned",
   "task_updated",
   "task_urged",

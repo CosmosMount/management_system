@@ -145,8 +145,14 @@ export default async function ProgressNotificationsPage({
 }
 
 async function ReminderSettingsPanel() {
-  const result = await listReminderSettings();
-  return <ReminderSettingsClient initial={result.ok ? result.data : []} />;
+  let result: Awaited<ReturnType<typeof listReminderSettings>> | undefined;
+  try {
+    result = await listReminderSettings();
+  } catch {
+    result = undefined;
+  }
+  if (result?.ok) return <ReminderSettingsClient initial={result.data} />;
+  return <p role="alert" className="break-words text-sm text-destructive">{result?.error.message || "提醒配置加载失败，请刷新重试。"}</p>;
 }
 
 function NotificationViewNavigation({ params, settings = false }: { params: SearchParams; settings?: boolean }) {

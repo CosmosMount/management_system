@@ -1,6 +1,10 @@
 # 测试手册
 
+个人总结及所有进度提醒的独立执行涉及个人收件隔离、禁用手动执行、同请求重试、每日多时间点补执行、首次初始化不复活已删除配置，以及每 Task 仅首个 ACTIVE 节点。本轮按用户要求未运行测试或完整门禁；已有相关断言随接口更新不代表验证通过，发布前仍需按本手册在隔离环境验收。
+
 会议投入提醒定向验证使用 `npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，覆盖参会者权限、区间边界、停用/无账号、重复请求与独立重发、站内/通知机器人队列以及桌面和窄窗口弹窗操作。只通过官方隔离数据库和飞书禁发保护执行；完成门禁为 `npm run check` 与完整 `npm run test:e2e`。
+
+管理员全局总结定向验证：`npm run test:e2e -- tests/admin-global-summary.spec.ts`；Markdown/通知契约使用 `npm run test:node`。覆盖有效与撤权管理员、普通/局部/停用拒绝、手动/自动幂等、Outbox 失败回滚与安全失败记录、配置与立即执行 UI。本功能按需求仅验收桌面 `1440×1000`，不做窄屏专项。测试仅通过官方 runner 使用隔离 PostgreSQL、受控服务和飞书禁发保护，不使用开发库。此通知/数据库改动仍要求 `npm run check`、完整 `npm run test:e2e` 和隔离库迁移兼容性/schema drift 验证，定向结果不能代替完整门禁。
 
 本文档用于人工测试、Playwright 仿真测试和 subagent 测试执行。执行测试时不要提交本地 cookie、截图、HTML 快照、数据库文件或 `.tmp/` 内容。
 

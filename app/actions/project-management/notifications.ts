@@ -11,6 +11,34 @@ import {
 } from "@/lib/project-management/application/action-result";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { revalidateProjectManagement } from "@/lib/revalidate";
+import { runReminderNow as runReminderNowService } from "@/lib/project-management/application/reminder-execution-service";
+import { runAdminGlobalSummaryNow as runSummaryNow, listAdminGlobalSummaryRuns as listSummaryRuns } from "@/lib/project-management/application/admin-global-summary-service";
+
+export async function runReminderNow(input: unknown) {
+  return runProjectManagementAction({ event: "pm.reminder.execute", action: "runReminderNow", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor();
+    log.setActorAccountId(actor.accountId);
+    return runReminderNowService(actor, input);
+  } });
+}
+
+export async function runAdminGlobalSummaryNow(input: unknown) {
+  return runProjectManagementAction({ event: "pm.admin_global_summary.manual", action: "runAdminGlobalSummaryNow", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor();
+    log.setActorAccountId(actor.accountId);
+    const result = await runSummaryNow(actor, input);
+    revalidateProjectManagement();
+    return result;
+  } });
+}
+
+export async function listAdminGlobalSummaryRuns() {
+  return runProjectManagementAction({ event: "pm.admin_global_summary.list", action: "listAdminGlobalSummaryRuns", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor();
+    log.setActorAccountId(actor.accountId);
+    return listSummaryRuns(actor);
+  } });
+}
 
 export async function markInAppNotificationRead(
   input: unknown,
