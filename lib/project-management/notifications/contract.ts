@@ -12,6 +12,7 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "task_assigned",
   "task_updated",
   "task_urged",
+  "approval_urged",
   "task_activated",
   "task_deleted",
   "milestone_due",

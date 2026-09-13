@@ -2,6 +2,8 @@ import Link from "next/link";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { buttonVariants } from "@/components/ui/button";
 import { MeetingFilterForm } from "@/components/project-management/meetings/meeting-filter-form";
+import { MeetingTemplateBrowser } from "@/components/project-management/meetings/meeting-template-browser";
+import { listMeetingTemplates } from "@/lib/project-management/meetings/template-service";
 import { listMeetings } from "@/lib/project-management/meetings/service";
 import { canManageMeetings } from "@/lib/project-management/meetings/permissions";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
@@ -12,6 +14,9 @@ import { getProgressActorOrRedirect } from "../_auth";
 export default async function MeetingsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await getProgressActorOrRedirect();
   const params = await searchParams;
+  const templates = canManageMeetings(actor) ? await listMeetingTemplates(actor)
+    .then((data) => ({ data, error: "" }))
+    .catch((error: unknown) => ({ data: null, error: toProjectManagementServiceError(error).message })) : null;
   const filters: Record<string, string> = {};
   const keys = ["q", "personId", "dateFrom", "dateTo", "period", "projectId", "taskId", "mine", "sort"];
   for (const key of keys) {
@@ -30,6 +35,10 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
     <PageCommandBar title="会议" actions={canManageMeetings(actor) && <Link className={buttonVariants()} href={routes.progress.meetingNew}>创建会议</Link>} />
     <main className="mx-auto min-w-0 max-w-[96rem] space-y-5 px-4 py-6 sm:px-6 lg:px-8">
       <MeetingFilterForm key={JSON.stringify([filters, cursor])} initialValues={filters} />
+      {params.templateSaved === "1" && <p role="status" className="text-sm text-primary">会议模板已保存</p>}
+      <div className={templates ? "grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : "min-w-0"}>
+      <div className="min-w-0 space-y-4">
+      {templates && <h2 className="text-lg font-semibold">会议记录</h2>}
       {result.error && <p role="alert" className="text-destructive">{result.error} <Link href={routes.progress.meetings} className="underline">重新加载列表</Link></p>}
       {result.data?.items.length === 0 && <p role="status">{Object.keys(filters).length ? "没有符合条件的会议" : "暂无会议记录"}</p>}
       {!!result.data?.items.length && <section aria-label="会议列表" className="min-w-0 overflow-hidden rounded-xl border bg-card">
@@ -44,6 +53,9 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
         </article>)}
       </section>}
       {result.data?.nextCursor && <Link className={buttonVariants({ variant: "outline" })} href={`${routes.progress.meetings}?${new URLSearchParams({ ...filters, cursor: result.data.nextCursor })}`}>下一页会议</Link>}
+      </div>
+      {templates && <MeetingTemplateBrowser key={JSON.stringify(templates)} initialData={templates.data} initialError={templates.error} />}
+      </div>
     </main>
   </>;
 }

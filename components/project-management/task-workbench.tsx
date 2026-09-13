@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { TaskUrgeButton } from "@/components/project-management/task-urge-button";
+import { ApprovalUrgeButton } from "@/components/project-management/approval-urge-button";
 import { TaskDraftLeavePrompt } from "@/components/project-management/task-draft-leave-prompt";
 import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useEffect, useRef, useState } from "react";
@@ -406,13 +407,18 @@ export function TaskWorkbench({
           role="status"
           data-testid="task-approval-gate"
         >
-          {approvalGate.pendingApprovalConflict
+          <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>{approvalGate.pendingApprovalConflict
             ? "当前任务存在多条待审批记录，相关提交与结束操作已暂停，请联系管理员处理。"
             : approvalGate.pendingApproval?.kind === "MILESTONE_REVIEW"
               ? `里程碑「${approvalGate.pendingApproval.title}」正在等待审批。`
               : approvalGate.pendingApproval?.kind === "REVISION"
                 ? `计划修订「${approvalGate.pendingApproval.title || "未命名修订"}」正在等待审批。`
-                : `结束节点「${approvalGate.pendingApproval?.title || "结束节点"}」的结束申请正在等待审批。`}
+                : `结束节点「${approvalGate.pendingApproval?.title || "结束节点"}」的结束申请正在等待审批。`}</span>
+          {!approvalGate.pendingApprovalConflict && approvalGate.pendingApproval && (
+            <ApprovalUrgeButton kind={approvalGate.pendingApproval.kind} approvalId={approvalGate.pendingApproval.id} disabled={busy} />
+          )}
+          </div>
         </section>
       )}
 

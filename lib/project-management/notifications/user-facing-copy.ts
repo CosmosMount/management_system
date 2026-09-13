@@ -180,6 +180,8 @@ export function normalizeProjectManagementNotificationText(
   // identify the exact boundaries. Single-field templates can safely strip
   // fixed prefixes and suffixes without interpreting the captured content.
   switch (options.kind) {
+    case "approval_urged":
+      return value;
     case "task_assigned": {
       const created = value.match(/^Task「([\s\S]*)」已创建为草稿$/);
       if (created) return `任务「${created[1]}」已创建为草稿`;

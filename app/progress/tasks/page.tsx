@@ -35,10 +35,10 @@ export default async function ProgressTasksPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  const status = params.status === undefined ? "ACTIVE" : firstParam(params.status);
+  const status = firstParam(params.status);
   const priority = firstParam(params.priority);
   const query = firstParam(params.q);
-  const mine = params.mine === undefined ? true : paramValues(params.mine).includes("1");
+  const mine = params.mine === undefined ? false : paramValues(params.mine).includes("1");
   const cursor = firstParam(params.cursor) || undefined;
   let tasks;
   try {

@@ -99,6 +99,10 @@ npm run test:e2e:nightly
 
 ## 测试前准备
 
+会议模板定向回归：`npm run test:e2e -- tests/meeting-templates.spec.ts tests/meeting-templates-ui.spec.ts tests/meeting-records-migration.spec.ts tests/meeting-records-ui.spec.ts tests/meeting-filters.spec.ts`。覆盖超管共享 CRUD、直接服务拒绝越权和过期身份、幂等、版本并发、软删除审计、不可用引用、无通知副作用，以及两种填充入口、保留时间、空值覆盖、取消覆盖、关闭提示、删除后的草稿、会议与模板独立修改、分页、故障重试和键盘操作。UI 使用现有 desktop project 检查 `1440x1000` 和 `393x851`，复核页面无横向溢出。纯字段约束和深复制回归在 `tests/meeting-templates.node.ts`，通过 `npm run test:node` 执行。
+
+模板迁移兼容性纳入现有会议迁移 spec：仅在官方 runner 的隔离本机 PostgreSQL 内创建随机迁移目标／影子库，向旧链写入历史会议后，通过显式隔离连接运行 `npm run db:deploy` 两次，检查旧数据保留、模板默认值、无时间字段／会议外键及两种 schema drift 校验。测试结束清理自身随机库，不使用正常开发或生产数据库；保持通知禁发和官方出站保护。模板变更的完整验收仍需 `npm run check`、完整 `npm run test:e2e`、`npm run build`，定向通过不替代全量验收。
+
 会议纪要导出定向回归：`npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，通过官方隔离数据库和受控服务运行，不连接真实飞书。覆盖指定进行中任务去重、项目/任务独立链接、参会人完整区间投入及边界、删除对象过滤、身份拒绝、上限拒绝、普通查看者复制、最新内容、剪贴板拒绝/不可用后的手动回退、请求失败与加载状态；UI 在现有 desktop project 内检查 `1440x1000` 和 Pixel 5 尺寸 `393x851`。模板纯格式化回归纳入 `tests/meeting-records.node.ts`，由 `npm run test:node` 运行。任务完成仍需代码门禁及完整 E2E，不以定向结果代替全量验收。
 
 ### 环境

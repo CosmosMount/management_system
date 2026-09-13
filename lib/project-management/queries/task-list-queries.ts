@@ -168,7 +168,7 @@ export async function listTasks({
         ],
       },
       include: taskListInclude,
-      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      orderBy: [{ priority: "asc" }, { updatedAt: "desc" }, { id: "desc" }],
       take: limit + 1,
     });
     visibleTasks = tasks.slice(0, limit);
