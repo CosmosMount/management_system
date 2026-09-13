@@ -105,6 +105,12 @@ export function ProcurementSummaryTable({ rows }: Props) {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border bg-card/80 px-4 py-3 shadow-sm">
+        <p className="text-sm text-muted-foreground">当前明细总价</p>
+        <p className="text-2xl font-semibold tracking-tight">
+          ¥{grandTotal.toFixed(2)}
+        </p>
+      </div>
       <div className="flex w-full flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">按组别查看：</span>
         <Select

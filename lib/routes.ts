@@ -14,6 +14,7 @@ export const routes = {
     new: "/procurement/new",
     list: "/procurement/list",
     dashboard: "/procurement/dashboard",
+    summary: "/procurement/summary",
     detail: (id: string) => `/procurement/${id}`,
     edit: (id: string) => `/procurement/${id}/edit`,
   },

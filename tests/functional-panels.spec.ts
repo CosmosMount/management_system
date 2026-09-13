@@ -140,8 +140,8 @@ test.describe("普通用户主功能面板", () => {
     await expect(page.getByText("PW全功能-草稿物料")).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto("/procurement/dashboard", { waitUntil: "networkidle" });
-    await expect(page.getByRole("heading", { name: "采购看板" })).toBeVisible();
+    await page.goto("/procurement/summary", { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: "明细汇总" })).toBeVisible();
     await expect(page.getByText(/处理人：/).first()).toBeVisible();
     const summaryTeamFilter = page.locator("#procurement-summary-team");
     await expect(summaryTeamFilter).not.toHaveAttribute("aria-invalid", "true");

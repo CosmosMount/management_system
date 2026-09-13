@@ -351,6 +351,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 | `/procurement/list` | 订单列表 |
 | `/procurement/[id]` | 订单详情与审批 |
 | `/procurement/dashboard` | 采购汇总看板 |
+| `/procurement/summary` | 采购明细汇总与 BOM 导出 |
 | `/admin` | 超级管理员概览 |
 | `/admin/accounts` | 统一账号与两个角色域管理 |
 | `/admin/time-markers` | 全局关键时间点管理 |

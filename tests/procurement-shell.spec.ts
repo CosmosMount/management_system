@@ -77,6 +77,7 @@ test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
           )
           .toEqual([
             "/procurement/dashboard",
+            "/procurement/summary",
             "/procurement/pending",
             "/procurement/new",
             "/procurement/list",
@@ -104,6 +105,7 @@ test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
 
       for (const panel of [
         { path: "/procurement/dashboard", heading: "采购看板" },
+        { path: "/procurement/summary", heading: "明细汇总" },
         { path: "/procurement/pending", heading: "待办与最近" },
         { path: "/procurement/new", heading: "采购申请" },
         { path: "/procurement/list", heading: "订单列表" },
