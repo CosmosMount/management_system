@@ -91,6 +91,33 @@ test("会议导出加载期间禁止重复点击且请求失败可重试", async
   await expectHealthyPage(page);
 });
 
+test("参会者可选择未填写人员并发送会议提醒", async ({ page, context, baseURL }) => {
+  const admin = await createAccountPerson(`提醒管理员 ${randomUUID()}`);
+  const participant = await createAccountPerson(`提醒参会者 ${randomUUID()}`);
+  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
+  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "投入填写提醒测试", personIds: [participant.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
+  await loginAsTestUser(context, baseURL, { openId: participant.openId, name: participant.person.displayName });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`/progress/meetings/${meeting.id}`);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.getByRole("button", { name: "提醒填写投入", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("checkbox")).toBeChecked();
+    await expect(dialog).toContainText(meeting.topic);
+    await dialog.getByRole("button", { name: "清空", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "发送提醒", exact: true })).toBeDisabled();
+    await dialog.getByRole("button", { name: "选择未填写人员", exact: true }).click();
+    await dialog.getByRole("button", { name: "发送提醒", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "已为 1 人创建站内通知" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id } })).toBe(2);
+  await expectHealthyPage(page);
+  expect(errors).toEqual([]);
+});
 
 test("会议时间线项目名称只展示一次并保留独立任务链接", async ({ page, context, baseURL }) => {
   const admin = await createAccountPerson(`会议表头超管 ${randomUUID()}`);
@@ -320,32 +347,4 @@ test("长主题、密集人员及纪要不溢出，空工作行支持刷新", as
   await expect(page.getByTestId("meeting-timeline")).toBeVisible();
   await expectHealthyPage(page);
   await page.screenshot({ path: testInfo.outputPath("meeting-detail.png"), fullPage: true });
-});
-
-test("参会者可选择未填写人员并发送会议提醒", async ({ page, context, baseURL }) => {
-  const admin = await createAccountPerson(`提醒管理员 ${randomUUID()}`);
-  const participant = await createAccountPerson(`提醒参会者 ${randomUUID()}`);
-  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
-  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "投入填写提醒测试", personIds: [participant.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
-  await loginAsTestUser(context, baseURL, { openId: participant.openId, name: participant.person.displayName });
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`/progress/meetings/${meeting.id}`);
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.getByRole("button", { name: "提醒填写投入", exact: true }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog.getByRole("checkbox")).toBeChecked();
-    await expect(dialog).toContainText(meeting.topic);
-    await dialog.getByRole("button", { name: "清空", exact: true }).click();
-    await expect(dialog.getByRole("button", { name: "发送提醒", exact: true })).toBeDisabled();
-    await dialog.getByRole("button", { name: "选择未填写人员", exact: true }).click();
-    await dialog.getByRole("button", { name: "发送提醒", exact: true }).click();
-    await expect(dialog).not.toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: "已为 1 人创建站内通知" })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  }
-  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id } })).toBe(2);
-  await expectHealthyPage(page);
-  expect(errors).toEqual([]);
 });

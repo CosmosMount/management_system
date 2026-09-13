@@ -1,4 +1,3 @@
-import { listMeetingMissingPeople, urgeMeetingWorkSegments } from "../lib/project-management/application/meeting-urge-service";
 // @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
@@ -6,6 +5,39 @@ import { prisma } from "../lib/prisma";
 import { createMeeting, updateMeeting, getMeeting, listMeetings } from "../lib/project-management/meetings/service";
 import { getMeetingTimeline } from "../lib/project-management/meetings/timeline";
 import { exportMeetingMinutes } from "../lib/project-management/meetings/export";
+import { listMeetingMissingPeople, urgeMeetingWorkSegments } from "../lib/project-management/application/meeting-urge-service";
+
+test("会议投入提醒校验权限、区间、幂等和投递记录", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const meeting = await createMeeting(actor(admin), input);
+  const query = { meetingId: meeting.id };
+  await expectErrorCode(listMeetingMissingPeople(actor(viewer), query), "FORBIDDEN");
+  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
+  await createSegment({ accountId: participant.account.id, personId: participant.person.id, startAt: atHour(7), endAt: atHour(8), content: "边界外" });
+  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
+  const segment = await createSegment({ accountId: participant.account.id, personId: participant.person.id, startAt: atHour(8), endAt: atHour(9), content: "本次投入" });
+  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(false);
+  await prisma.workSegment.update({ where: { id: segment.id }, data: { deletedAt: new Date() } });
+  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
+  const send = { ...query, expectedVersion: meeting.version, requestId: randomUUID(), recipientPersonIds: [participant.person.id] };
+  await expectErrorCode(urgeMeetingWorkSegments(actor(viewer), send), "FORBIDDEN");
+  await expectErrorCode(urgeMeetingWorkSegments(actor(participant), { ...send, recipientPersonIds: [viewer.person.id] }), "FORBIDDEN");
+  const results = await Promise.all([urgeMeetingWorkSegments(actor(participant), send), urgeMeetingWorkSegments(actor(participant), send)]);
+  expect(results.map((result) => result.recipientCount)).toEqual([1, 1]);
+  expect(await prisma.domainAuditEvent.count({ where: { entityId: meeting.id, action: "pm.meeting.work_segment_reminder" } })).toBe(1);
+  const outboxes = await prisma.notificationOutbox.findMany({ where: { type: "meeting_work_segment_reminder", payload: { contains: meeting.id } } });
+  expect(outboxes).toHaveLength(1);
+  expect(outboxes[0].botKind).toBe("notification");
+  const payload = JSON.parse(outboxes[0].payload);
+  expect(payload.summary).toContain(meeting.topic);
+  expect(payload.summary).toContain("北京时间");
+  expect(payload.recipientOpenIds).toEqual([participant.openId]);
+  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id, recipientAccountId: participant.account.id } })).toBe(1);
+  await urgeMeetingWorkSegments(actor(participant), { ...send, requestId: randomUUID() });
+  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id } })).toBe(2);
+  await prisma.person.update({ where: { id: participant.person.id }, data: { status: "INACTIVE" } });
+  await expectErrorCode(urgeMeetingWorkSegments(actor(participant), { ...send, requestId: randomUUID() }), "FORBIDDEN");
+});
 import { actor, atHour, createAccountPerson, createSegment, createTask, expectErrorCode } from "./helpers/project-management-canvas-security-fixtures";
 
 test("会议导出仅列指定进行中任务，汇总参会人完整区间投入且不改写会议或发送通知", async () => {
@@ -248,36 +280,4 @@ test("超量工作记录明确报错而非截断，可缩小查看范围恢复",
   const narrower = await getMeetingTimeline(actor(viewer), { ...query, rangeStart: atHour(10).toISOString() });
   expect(narrower.rows).toHaveLength(1);
   expect(narrower.segments).toHaveLength(0);
-});
-
-test("会议投入提醒校验权限、区间、幂等和投递记录", async () => {
-  const { admin, viewer, participant, input } = await fixture();
-  const meeting = await createMeeting(actor(admin), input);
-  const query = { meetingId: meeting.id };
-  await expectErrorCode(listMeetingMissingPeople(actor(viewer), query), "FORBIDDEN");
-  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
-  await createSegment({ accountId: participant.account.id, personId: participant.person.id, startAt: atHour(7), endAt: atHour(8), content: "边界外" });
-  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
-  const segment = await createSegment({ accountId: participant.account.id, personId: participant.person.id, startAt: atHour(8), endAt: atHour(9), content: "本次投入" });
-  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(false);
-  await prisma.workSegment.update({ where: { id: segment.id }, data: { deletedAt: new Date() } });
-  expect((await listMeetingMissingPeople(actor(participant), query)).participants[0].missing).toBe(true);
-  const send = { ...query, expectedVersion: meeting.version, requestId: randomUUID(), recipientPersonIds: [participant.person.id] };
-  await expectErrorCode(urgeMeetingWorkSegments(actor(viewer), send), "FORBIDDEN");
-  await expectErrorCode(urgeMeetingWorkSegments(actor(participant), { ...send, recipientPersonIds: [viewer.person.id] }), "FORBIDDEN");
-  const results = await Promise.all([urgeMeetingWorkSegments(actor(participant), send), urgeMeetingWorkSegments(actor(participant), send)]);
-  expect(results.map((result) => result.recipientCount)).toEqual([1, 1]);
-  expect(await prisma.domainAuditEvent.count({ where: { entityId: meeting.id, action: "pm.meeting.work_segment_reminder" } })).toBe(1);
-  const outboxes = await prisma.notificationOutbox.findMany({ where: { type: "meeting_work_segment_reminder", payload: { contains: meeting.id } } });
-  expect(outboxes).toHaveLength(1);
-  expect(outboxes[0].botKind).toBe("notification");
-  const payload = JSON.parse(outboxes[0].payload);
-  expect(payload.summary).toContain(meeting.topic);
-  expect(payload.summary).toContain("北京时间");
-  expect(payload.recipientOpenIds).toEqual([participant.openId]);
-  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id, recipientAccountId: participant.account.id } })).toBe(1);
-  await urgeMeetingWorkSegments(actor(participant), { ...send, requestId: randomUUID() });
-  expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id } })).toBe(2);
-  await prisma.person.update({ where: { id: participant.person.id }, data: { status: "INACTIVE" } });
-  await expectErrorCode(urgeMeetingWorkSegments(actor(participant), { ...send, requestId: randomUUID() }), "FORBIDDEN");
 });

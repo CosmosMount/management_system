@@ -6,7 +6,6 @@ import { meetingFieldsSchema, meetingTimelineSchema, meetingTimelineDisplaySchem
 import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { resolveContentNavigationWindow } from "../lib/project-management/time-canvas/content-window";
-
 import { formatMeetingMinutes, type MeetingMinutesSource } from "../lib/project-management/meetings/markdown";
 
 test("会议导出模板保留结构、绝对链接、北京时间及安全的多行列表", () => {

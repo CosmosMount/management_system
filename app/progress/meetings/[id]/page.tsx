@@ -1,5 +1,3 @@
-import { MeetingExportButton } from "@/components/project-management/meetings/meeting-export-button";
-import { MeetingWorkSegmentReminder } from "@/components/project-management/meetings/meeting-work-segment-reminder";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
@@ -12,6 +10,8 @@ import { idSchema } from "@/lib/project-management/validations/lifecycle";
 import { formatDateTime } from "@/lib/project-management/labels";
 import { routes } from "@/lib/routes";
 import { getProgressActorOrRedirect } from "../../_auth";
+import { MeetingWorkSegmentReminder } from "@/components/project-management/meetings/meeting-work-segment-reminder";
+import { MeetingExportButton } from "@/components/project-management/meetings/meeting-export-button";
 
 export default async function MeetingPage({ params, searchParams }: {
   params: Promise<{ id: string }>;
