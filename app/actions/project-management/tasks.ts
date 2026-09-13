@@ -18,9 +18,32 @@ import { getCurrentProjectManagementActor } from "@/lib/project-management/ident
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 import { urgeTask as urgeTaskService } from "@/lib/project-management/application/task-urge-service";
+import { loadApprovalUrgeTargets, urgeApproval as urgeApprovalService } from "@/lib/project-management/application/approval-urge-service";
 
 export async function urgeTask(input: unknown) {
   return runTaskMutationAction("pm.task.urge", "urgeTask", input, urgeTaskService);
+}
+
+export async function urgeApproval(input: unknown) {
+  return runProjectManagementAction({
+    event: "pm.approval.urge",
+    action: "urgeApproval",
+    callback: async (log) => {
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      const result = await urgeApprovalService(actor, input);
+      drainNotificationOutboxSoon();
+      return result;
+    },
+  });
+}
+
+export async function loadApprovalUrgeTargetsAction() {
+  return runProjectManagementAction({
+    event: "pm.approval.urge_targets",
+    action: "loadApprovalUrgeTargets",
+    callback: async () => loadApprovalUrgeTargets(),
+  });
 }
 
 export async function createTaskDraft(
