@@ -23,6 +23,7 @@ import {
   NonRetryableNotificationError,
 } from "@/lib/notification-channel-adapter";
 import { filterActiveFeishuOpenIds } from "@/lib/active-account";
+import { parseNotificationPayload } from "@/lib/notification-payload";
 
 const appOriginSchema = z.string().nullable().optional();
 const feedbackOutboxPayloadSchema = z.discriminatedUnion("kind", [
@@ -79,22 +80,16 @@ function parseRow(row: NotificationOutbox): {
   data: FeedbackOutboxPayload;
   botKind: FeishuBotKind;
 } {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(row.payload);
-  } catch {
-    throw new NonRetryableNotificationError("反馈通知 payload 不是有效 JSON");
-  }
-  const result = feedbackOutboxPayloadSchema.safeParse(decoded);
-  if (!result.success) {
-    throw new NonRetryableNotificationError("反馈通知 payload 不符合持久化契约");
-  }
-  const data = result.data as FeedbackOutboxPayload;
-  if (row.type !== data.kind) {
-    throw new NonRetryableNotificationError(
-      `反馈通知元数据不一致：type=${row.type}，payload.kind=${data.kind}`,
-    );
-  }
+  const data: FeedbackOutboxPayload = parseNotificationPayload(
+    row,
+    feedbackOutboxPayloadSchema,
+    {
+      invalidJson: "反馈通知 payload 不是有效 JSON",
+      invalidPayload: "反馈通知 payload 不符合持久化契约",
+      metadata: (kind) =>
+        `反馈通知元数据不一致：type=${row.type}，payload.kind=${kind}`,
+    },
+  );
   if (row.botKind !== "notification" && row.botKind !== "approval") {
     throw new NonRetryableNotificationError(
       `反馈通知机器人类型无效：${row.botKind}`,
