@@ -78,6 +78,25 @@ export async function canViewFileAsset({
   userOpenId: string;
   roles: UserRoleRecord[];
 }): Promise<boolean> {
+  if (asset.kind === "MATERIAL_RETURN_PHOTO") {
+    if (asset.cleanupRequestedAt) return false;
+    const viewer = await prisma.accountIdentity.findFirst({
+      where: {
+        provider: "FEISHU",
+        tenantId: "default",
+        openId: userOpenId,
+        account: { person: { status: "ACTIVE" } },
+      },
+      select: { id: true },
+    });
+    if (!viewer) return false;
+    return Boolean(
+      await prisma.materialLoan.findFirst({
+        where: { returnPhotoPath: asset.publicPath },
+        select: { id: true },
+      }),
+    );
+  }
   if (asset.kind === "PROJECT_AVATAR") {
     if (!asset.projectId) return asset.ownerOpenId === userOpenId;
     return Boolean(

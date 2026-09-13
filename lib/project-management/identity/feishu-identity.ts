@@ -80,14 +80,17 @@ export async function resolveFeishuIdentityForUserTx(
   const displayName = normalizeOptional(input.name) ?? "未知用户";
   const avatar = normalizeOptional(input.avatar);
 
-  const [subjectIdentity, openIdentity, unionIdentity, openUser, unionUser] =
-    await Promise.all([
-    findIdentity(tx, { providerSubject: requestedProviderSubject }),
-    findIdentity(tx, { openId }),
-    unionId ? findIdentity(tx, { unionId }) : Promise.resolve(null),
-    tx.user.findUnique({ where: { openId } }),
-    unionId ? tx.user.findUnique({ where: { unionId } }) : Promise.resolve(null),
-  ]);
+  const subjectIdentity = await findIdentity(tx, {
+    providerSubject: requestedProviderSubject,
+  });
+  const openIdentity = await findIdentity(tx, { openId });
+  const unionIdentity = unionId
+    ? await findIdentity(tx, { unionId })
+    : null;
+  const openUser = await tx.user.findUnique({ where: { openId } });
+  const unionUser = unionId
+    ? await tx.user.findUnique({ where: { unionId } })
+    : null;
   const identities = [subjectIdentity, openIdentity, unionIdentity].filter(
     (identity): identity is IdentityWithAccount => identity !== null,
   );
@@ -251,13 +254,15 @@ async function reconcileReimbursementUserTx(
     avatar: string | null;
   },
 ): Promise<{ user: User; created: boolean }> {
-  const [accountUser, openUser, unionUser] = await Promise.all([
-    tx.user.findUnique({ where: { accountId: input.accountId } }),
-    tx.user.findUnique({ where: { openId: input.openId } }),
-    input.unionId
-      ? tx.user.findUnique({ where: { unionId: input.unionId } })
-      : Promise.resolve(null),
-  ]);
+  const accountUser = await tx.user.findUnique({
+    where: { accountId: input.accountId },
+  });
+  const openUser = await tx.user.findUnique({
+    where: { openId: input.openId },
+  });
+  const unionUser = input.unionId
+    ? await tx.user.findUnique({ where: { unionId: input.unionId } })
+    : null;
   const candidates = [accountUser, unionUser, openUser].filter(
     (user): user is User => user !== null,
   );

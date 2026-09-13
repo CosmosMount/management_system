@@ -15,10 +15,10 @@
 ## 全功能回归分层
 
 - **L0 静态与构建**：`npm run check`、migration drift 和 `npm run build` 全部通过；warning 必须记录并分级。
-- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、管理员和附件入口；Desktop `1440x1000` 均无 500、Next error overlay 或横向溢出。
-- **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、管理员筛选均可刷新复现，且控制台无未处理错误。
-- **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
-- **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
+- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、物资管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
+- **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、物资台账/二维码、管理员筛选均可刷新复现，且控制台无未处理错误。
+- **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批、物资登记/领用/归还以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
+- **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、物资并发领用与扫码重放、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
 
 全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、待处理/处理中/已关闭反馈、多个 Task 状态及投入时间区间、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
 

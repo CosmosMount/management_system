@@ -11,6 +11,7 @@ import {
   publicPathToStoragePath,
 } from "@/lib/file-upload";
 import { storagePathToAbsolute } from "@/lib/upload-paths";
+import { uploadCacheControl } from "@/lib/upload-response-policy";
 
 const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -104,7 +105,7 @@ export async function serveUploadFile(
       "Content-Type": contentType,
       "Content-Length": String(fileStat.size),
       "Content-Disposition": contentDisposition(filename, forceDownload),
-      "Cache-Control": "private, max-age=3600",
+      "Cache-Control": uploadCacheControl(asset.kind),
       "X-Content-Type-Options": "nosniff",
     },
   });

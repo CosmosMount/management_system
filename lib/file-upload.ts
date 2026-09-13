@@ -18,6 +18,10 @@ import {
   detectFeedbackImage,
   extensionForMime,
 } from "@/lib/upload-mime";
+import {
+  assertMaterialReturnPhotoContent,
+  MAX_MATERIAL_RETURN_PHOTO_SIZE,
+} from "@/lib/material-management/return-photo-file";
 
 export { MAX_FEEDBACK_IMAGE_COUNT, MAX_FEEDBACK_IMAGE_SIZE } from "@/lib/feedback-upload-limits";
 export {
@@ -65,6 +69,7 @@ const FEEDBACK_IMAGE_TYPES: ReadonlySet<string> = new Set(
 
 export const MAX_SIGNATURE_SIZE = 2 * 1024 * 1024;
 export const MAX_PROJECT_AVATAR_SIZE = 2 * 1024 * 1024;
+export { MAX_MATERIAL_RETURN_PHOTO_SIZE } from "@/lib/material-management/return-photo-file";
 const PROJECT_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
 export type SavedFeedbackImage = {
@@ -282,6 +287,32 @@ export async function saveProjectAvatarDraft(
     },
   });
   return publicPath;
+}
+
+export async function saveMaterialReturnPhoto(
+  loanId: string,
+  ownerOpenId: string,
+  file: File,
+): Promise<{ publicPath: string; writeGeneration: string }> {
+  if (file.size > MAX_MATERIAL_RETURN_PHOTO_SIZE) {
+    throw new Error("归还照片不能超过 8MB");
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detectedMimeType = assertMaterialReturnPhotoContent(buffer, file.type);
+  const extension = extensionForMime(detectedMimeType);
+  if (!extension) throw new Error("归还照片格式无效");
+  const filename = `${randomUUID()}${extension}`;
+  const storagePath = `materials/${loanId}/${filename}`;
+  const publicPath = `/uploads/${storagePath}`;
+  const writeGeneration = await writeAssetFile({
+    storagePath,
+    publicPath,
+    buffer,
+    mimeType: detectedMimeType,
+    options: { kind: "MATERIAL_RETURN_PHOTO", ownerOpenId },
+  });
+  return { publicPath, writeGeneration };
 }
 
 export async function removeFeedbackUpload(publicPath: string): Promise<void> {

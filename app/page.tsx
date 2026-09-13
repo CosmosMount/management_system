@@ -1,4 +1,4 @@
-import { FolderKanban, Shield, ShoppingCart } from "lucide-react";
+import { FolderKanban, PackageSearch, Shield, ShoppingCart } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
@@ -34,6 +34,13 @@ export default async function HomePage() {
               title="采购管理"
               description="采购申请、订单审批、报销与统计看板"
               icon={ShoppingCart}
+            />
+            <NavCard
+              variant="wide"
+              href={routes.materials.root}
+              title="物资管理"
+              description="物资台账、二维码领用归还与在用状态"
+              icon={PackageSearch}
             />
             <NavCard
               variant="wide"
