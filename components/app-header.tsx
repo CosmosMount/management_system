@@ -30,6 +30,9 @@ export async function AppHeader() {
           <Link href={routes.procurement.root} className={navLinkClass}>
             采购管理
           </Link>
+          <Link href={routes.materials.root} className={navLinkClass}>
+            物资
+          </Link>
           <Link href={routes.progress.root} className={navLinkClass}>
             <span className="hidden sm:inline">项目管理</span>
             <span className="sm:hidden">项目</span>

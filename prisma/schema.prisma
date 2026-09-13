@@ -38,6 +38,7 @@ enum FileAssetKind {
   USER_SIGNATURE
   TEMP_UPLOAD
   PROJECT_AVATAR
+  MATERIAL_RETURN_PHOTO
 }
 
 enum NotificationOutboxStatus {
@@ -233,6 +234,8 @@ model Account {
   deletedComments           Comment[]                     @relation("CommentDeletedByAccount")
   submittedProjectRequests  ProjectEstablishmentRequest[] @relation("ProjectRequestSubmittedBy")
   reviewedProjectRequests   ProjectEstablishmentRequest[] @relation("ProjectRequestReviewer")
+  createdMaterials          Material[]                    @relation("MaterialCreatedBy")
+  materialLoans             MaterialLoan[]                @relation("MaterialBorrower")
   createdAt                 DateTime                      @default(now()) @db.Timestamptz(6)
   updatedAt                 DateTime                      @updatedAt @db.Timestamptz(6)
 }
@@ -427,6 +430,41 @@ model Feedback {
   @@index([status, lastMessageAt])
 }
 
+model Material {
+  id                 String         @id @default(uuid())
+  qrToken            String         @unique @default(uuid()) @db.Uuid
+  registrationKey    String         @unique @db.Uuid
+  name               String         @db.VarChar(200)
+  price              Decimal        @db.Decimal(12, 2)
+  techGroup          String         @db.VarChar(32)
+  createdByAccountId String
+  createdByAccount   Account        @relation("MaterialCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  loans              MaterialLoan[]
+  createdAt          DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(6)
+
+  @@index([techGroup, createdAt])
+  @@index([createdAt])
+}
+
+model MaterialLoan {
+  id                     String    @id @default(uuid())
+  materialId             String
+  material               Material  @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  borrowerAccountId      String
+  borrowerAccount        Account   @relation("MaterialBorrower", fields: [borrowerAccountId], references: [id], onDelete: Restrict)
+  checkoutIdempotencyKey String    @unique @db.Uuid
+  returnIdempotencyKey   String?   @unique @db.Uuid
+  checkedOutAt           DateTime  @default(now()) @db.Timestamptz(6)
+  returnedAt             DateTime? @db.Timestamptz(6)
+  returnPhotoPath        String?   @unique
+  returnPhotoClearedAt   DateTime? @db.Timestamptz(6)
+  returnPhoto            FileAsset? @relation("MaterialReturnPhoto", fields: [returnPhotoPath], references: [publicPath], onDelete: Restrict)
+
+  @@index([materialId, returnedAt, checkedOutAt])
+  @@index([borrowerAccountId, returnedAt, checkedOutAt])
+}
+
 model FeedbackMessage {
   id           String               @id @default(uuid())
   feedbackId   String
@@ -472,6 +510,7 @@ model FileAsset {
   cleanupNextRunAt     DateTime?
   createdAt            DateTime         @default(now())
   reviewEvidences      ReviewEvidence[]
+  materialReturnPhoto  MaterialLoan?    @relation("MaterialReturnPhoto")
 
   @@index([orderId])
   @@index([feedbackId])

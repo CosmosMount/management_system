@@ -27,7 +27,7 @@ export async function writeAssetFile({
   buffer: Buffer;
   mimeType: string;
   options: SaveAssetOptions;
-}) {
+}): Promise<string> {
   const fullPath = storagePathToAbsolute(storagePath);
   const previousAssetVersion = await prisma.fileAsset.findUnique({
     where: { publicPath },
@@ -107,6 +107,7 @@ export async function writeAssetFile({
         });
       });
     }
+    return writeGeneration;
   } catch (error) {
     if (backupCreated) {
       await recoverFailedAssetOverwrite({ backupPath, fullPath, storagePath });

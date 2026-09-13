@@ -33,3 +33,12 @@ export function revalidateProjectManagement(taskId?: string, projectId?: string)
     revalidatePath(`/progress/projects/${projectId}`);
   }
 }
+
+export function revalidateMaterials(materialId?: string, qrToken?: string) {
+  revalidatePath("/");
+  revalidatePath(routes.materials.root);
+  if (materialId) {
+    revalidatePath(routes.materials.detail(materialId));
+  }
+  if (qrToken) revalidatePath(routes.materials.scan(qrToken));
+}

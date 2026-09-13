@@ -17,6 +17,12 @@ export const routes = {
     detail: (id: string) => `/procurement/${id}`,
     edit: (id: string) => `/procurement/${id}/edit`,
   },
+  materials: {
+    root: "/materials",
+    new: "/materials/new",
+    detail: (id: string) => `/materials/${id}`,
+    scan: (qrToken: string) => `/materials/scan/${qrToken}`,
+  },
   progress: {
     root: "/progress",
     kanban: "/progress/kanban",

@@ -7,17 +7,20 @@
 ## 全功能回归分层
 
 - **L0 静态与构建**：`npm run check`、migration drift 和 `npm run build` 全部通过；warning 必须记录并分级。
-- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
-- **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、管理员筛选均可刷新复现，且控制台无未处理错误。
-- **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
-- **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
+- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、物资管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
+- **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、物资台账/二维码、管理员筛选均可刷新复现，且控制台无未处理错误。
+- **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批、物资登记/领用/归还以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
+- **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、物资并发领用与扫码重放、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
 
 全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、待处理/处理中/已关闭反馈、多个 Task 状态及投入时间区间、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
 
 ### 自动化测试定义清单
 
-截至 2026-09-07，`tests/` 有两类可执行测试定义：8 个 `tests/*.node.ts` 文件（26 个 `node:test` 用例）和 78 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
+截至 2026-09-11，`tests/` 有两类可执行测试定义：11 个 `tests/*.node.ts` 文件（39 个 `node:test` 用例）和 81 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
 
+- **Node / 客户端 UUID 降级契约（3 个用例）**：`client-uuid.node.ts`。
+- **Node / D110 标签与浏览器能力契约（6 个用例）**：`d110-label.node.ts`。
+- **Node / 物资归还照片契约（4 个用例）**：`material-return-photo.node.ts`。
 - **Node / cron 调度与处理器映射（2 个用例）**：`cron-schedule-wiring.node.ts`。
 - **Node / 项目管理展示契约（5 个用例）**：`project-management-recent-activity-formatter.node.ts`。
 - **Node / Composer 浏览器存储契约（2 个用例）**：`task-composer-legacy-draft-tombstone.node.ts`。
@@ -31,10 +34,11 @@
 - **Playwright / 采购、报销与反馈写入（12 个 spec）**：`inactive-person-procurement-safety`、`processing-vendor-hook-races`、`procurement-budget-import-atomicity`、`procurement-budget-pool-dashboard`、`procurement-dashboard-spend`、`procurement-form-accessibility`、`procurement-import-dialog-races`、`procurement-notify-approver`、`procurement-pending-orders`、`procurement-shell`、`procurement-teacher-email`、`procurement-upload-atomicity`。
 - **Playwright / 飞书与通知（7 个 spec）**：`feishu-boundaries`、`feishu-delivery-guard`、`feishu-message`、`feishu-procurement-card-stage`、`feishu-procurement-confirm-card`、`notification-outbox-adapters`、`notification-user-facing-copy`。
 - **Playwright / 项目管理、迁移与发布（46 个 spec）**：在原有 43 个 spec 基础上增加 `project-management-person-kanban-query`、`project-management-person-kanban` 与 `unified-work-segments-migration`；前者锁定单人时间线的数据范围、停用人员与自查边界，后者覆盖 Desktop/Pixel 5 上的默认人员、人员切换、只读详情和规范 URL。`project-management-query-pagination` 与 `project-management-ui-pagination` 继续锁定通知、Task、风险、近期动态的复合游标稳定排序与对象/筛选锚点校验，以及首屏外记录的可达性。
+- **Playwright / 物资管理（2 个 spec）**：`material-management-concurrency` 覆盖登记幂等、并发领用、非领用人归还拒绝、无照片归还拒绝、照片关联与下一位领用清理、扫码重放、停用账号、二维码和历史数据库保护及审计；`material-management-ui` 在 Desktop/Pixel 5 覆盖入口、侧栏/抽屉、字段错误焦点、长名称、二维码生成、未登录扫码回跳、领用、台账使用人、归还拍照必填/预览和归还照片展示。
 
-每个 Playwright spec 必须使用 `.spec.ts` 文件名，在首行声明 `// @playwright-project node-db` 或 `// @playwright-project ui`，并在该 spec 内直接从 `@playwright/test` 导入 `test`（允许 import alias）。分类器会先扫描 Playwright 1.61.1 默认的 `**/*.@(spec|test).?(c|m)[jt]s?(x)` 名称；`.test.ts`、`.spec.tsx`、`.test.tsx` 和相应 JS/MJS/CJS/JSX/MTS/CTS 形式都会显式拒绝，不能在项目 `testMatch` 生成前被静默遗漏。共享 AST 分类器只静态追踪官方本地 binding：每次引用都必须是已批准 direct `test...()` API 的 root，test/suite/hook 注册 callback 必须 inline；本地/容器/factory alias、computed/间接 test API 和 `test.extend` 都会 fail closed。Playwright 1.61.1 的 `test.describe.fixme`、`test.describe.serial.only`、`test.describe.parallel.only` 及 `test.expect` 的 `soft`/`poll`/`configure`/`extend`/asymmetric matcher 入口均受支持；`test.info()`、configured/extended Expect 和 matcher 返回值可正常读取或调用。`test.skip`/`fixme`/`fail`/`slow` conditional callback 必须 inline，其中的 fixture 会参与分类；fixture key 使用 AST 解码后的标识符或字符串值，Unicode escape 不能隐藏 `page`/`browser`/`context`，computed key 会 fail closed。模块或 suite 注册阶段只允许官方 test API、未被局部绑定遮蔽且参数中不含可调用本地绑定的 Node 内建调用及少量确定性全局调用；能接收 callback 的 safe-global path、Promise 或未解析构造器、本地注册 helper、非 Node 导入、namespace 解构、callback 型 factory，以及 getter/解构/对象展开/custom iterator 等隐式注册期执行一律拒绝。它不虚称能跨模块追踪 custom fixture，只在无法证明绑定安全时 fail closed；Stage 3A 再统一 UI fixture。因此无需在配置或文档维护第二份 79 文件 topology 清单。分类器还会拒绝声明缺失/重复、node-db 文件使用浏览器 fixture、或 UI 文件完全不使用 `page`/`browser`/`context`。`node-db` project 收集 47 个非浏览器 DB/API/领域 spec 一次；31 个真正 UI spec 继续由 `desktop`（Desktop Chrome，`1440x1000`）与 `mobile`（Pixel 5）各收集一次。默认 reporter 始终拒绝实际收集中的跨项目或未分类文件，并在校验失败时先把整套已收集测试标记为 skipped、阻止测试体副作用，再由 `onEnd` 返回失败；默认、`--list`、纯 `--project` 以及 timeout/headed/retry/trace/output/quiet 等不缩小收集集的参数属于全集选择，会逐文件验证与所选 project 相交的全部 spec 完整出现。`--project` 的 exact、大小写不敏感和 `*` wildcard 行为由 runner/reporter 共用 helper，并以真实 Playwright CLI 回归锁定 `Desktop`、`d*`、`*`、split/equal 形式及错误状态。只有文件/行号、grep、grep-invert、shard、last-failed、only-changed、test-list/test-list-invert 属于局部选择，只放宽未选择文件和每个文件的完整 project 集合要求；未知长参数直接拒绝，不能借 partial 绕过全集校验。`.node.ts` 只由 `test:node` 收集。
+每个 Playwright spec 必须使用 `.spec.ts` 文件名，在首行声明 `// @playwright-project node-db` 或 `// @playwright-project ui`，并在该 spec 内直接从 `@playwright/test` 导入 `test`（允许 import alias）。分类器会先扫描 Playwright 1.61.1 默认的 `**/*.@(spec|test).?(c|m)[jt]s?(x)` 名称；`.test.ts`、`.spec.tsx`、`.test.tsx` 和相应 JS/MJS/CJS/JSX/MTS/CTS 形式都会显式拒绝，不能在项目 `testMatch` 生成前被静默遗漏。共享 AST 分类器只静态追踪官方本地 binding：每次引用都必须是已批准 direct `test...()` API 的 root，test/suite/hook 注册 callback 必须 inline；本地/容器/factory alias、computed/间接 test API 和 `test.extend` 都会 fail closed。Playwright 1.61.1 的 `test.describe.fixme`、`test.describe.serial.only`、`test.describe.parallel.only` 及 `test.expect` 的 `soft`/`poll`/`configure`/`extend`/asymmetric matcher 入口均受支持；`test.info()`、configured/extended Expect 和 matcher 返回值可正常读取或调用。`test.skip`/`fixme`/`fail`/`slow` conditional callback 必须 inline，其中的 fixture 会参与分类；fixture key 使用 AST 解码后的标识符或字符串值，Unicode escape 不能隐藏 `page`/`browser`/`context`，computed key 会 fail closed。模块或 suite 注册阶段只允许官方 test API、未被局部绑定遮蔽且参数中不含可调用本地绑定的 Node 内建调用及少量确定性全局调用；能接收 callback 的 safe-global path、Promise 或未解析构造器、本地注册 helper、非 Node 导入、namespace 解构、callback 型 factory，以及 getter/解构/对象展开/custom iterator 等隐式注册期执行一律拒绝。它不虚称能跨模块追踪 custom fixture，只在无法证明绑定安全时 fail closed；Stage 3A 再统一 UI fixture。因此无需在配置或文档维护第二份 81 文件 topology 清单。分类器还会拒绝声明缺失/重复、node-db 文件使用浏览器 fixture、或 UI 文件完全不使用 `page`/`browser`/`context`。`node-db` project 收集 49 个非浏览器 DB/API/领域 spec 一次；32 个真正 UI spec 继续由 `desktop`（Desktop Chrome，`1440x1000`）与 `mobile`（Pixel 5）各收集一次。默认 reporter 始终拒绝实际收集中的跨项目或未分类文件，并在校验失败时先把整套已收集测试标记为 skipped、阻止测试体副作用，再由 `onEnd` 返回失败；默认、`--list`、纯 `--project` 以及 timeout/headed/retry/trace/output/quiet 等不缩小收集集的参数属于全集选择，会逐文件验证与所选 project 相交的全部 spec 完整出现。`--project` 的 exact、大小写不敏感和 `*` wildcard 行为由 runner/reporter 共用 helper，并以真实 Playwright CLI 回归锁定 `Desktop`、`d*`、`*`、split/equal 形式及错误状态。只有文件/行号、grep、grep-invert、shard、last-failed、only-changed、test-list/test-list-invert 属于局部选择，只放宽未选择文件和每个文件的完整 project 集合要求；未知长参数直接拒绝，不能借 partial 绕过全集校验。`.node.ts` 只由 `test:node` 收集。
 
-Playwright 数据库 harness 另有两个独立验证入口：`npm run test:playwright-db-lifecycle` 负责不连接数据库的 runner 生命周期回归，`npm run test:playwright-db-safety` 负责真实随机 PostgreSQL target/shadow 的安全演练；二者不属于上述 79 个 spec，也不会由 `test:node` 重复执行。2026-09-07 使用官方 runner 执行全量收集的基线为 695 个 project-test：node-db 283、desktop 206、mobile 206，共 78 个文件。该数字只证明测试收集成功，不代表 695 个用例已经执行通过。
+Playwright 数据库 harness 另有两个独立验证入口：`npm run test:playwright-db-lifecycle` 负责不连接数据库的 runner 生命周期回归，`npm run test:playwright-db-safety` 负责真实随机 PostgreSQL target/shadow 的安全演练；二者不属于上述 81 个 spec，也不会由 `test:node` 重复执行。实际 project-test 数量以同一提交上通过官方 runner 执行的 `npm run test:e2e -- --list` 为准；列表只证明收集成功，不代表用例已经执行通过。
 
 用以下命令复核文件层基线和 Playwright 实际收集结果；Playwright 列表仍必须走官方 runner 和随机隔离数据库，不能直接调用 `playwright test` 绕过安全门禁：
 
@@ -208,7 +212,7 @@ npm run test:node
 npm run check
 ```
 
-`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 26 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 31/47/78 分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由，Composer 回归覆盖存储清理和计划移动边界。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
+`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 39 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 32/49/81 分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，客户端 UUID 回归锁定原生、`getRandomValues` 与无 Web Crypto 三条生成路径，D110 回归锁定安全上下文/Web Serial 能力、型号限制、标签文本/二维码边界和打印任务顺序/失败语义，物资照片回归锁定格式、大小、路径和缓存策略，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由，Composer 回归覆盖存储清理和计划移动边界。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
 
 schema/migration 变更只在已确认的隔离 PostgreSQL 验证部署和结构一致性。以下连接占位符必须替换为隔离测试目标和 shadow 库，不可直接执行，也不能使用正常开发或生产连接：
 
@@ -269,11 +273,25 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 - `/procurement/dashboard`
 - `/procurement/new`
 - `/progress`
+- `/materials`
 - `/feedback`
 - `/admin`
 - `/not-exists-for-test`
 
 404 页面期望：显示“页面不存在或无权访问”、有“返回首页”按钮，并能自动或手动回到 `/`。
+
+## 物资管理测试
+
+- `tests/material-management-concurrency.spec.ts` 在隔离 PostgreSQL 中验证同一登记请求只产生一件物资；两名用户并发领用只有一人成功；非领用人和无照片归还被拒绝；归还请求重放不产生第二次状态切换；照片只关联当前归还周期，下一位成功领用后路径、文件资产被清理且历史时间保留；停用账号不能写；二维码标识、领用历史和登记/领用/归还审计保持不变。
+- `tests/material-management-ui.spec.ts` 在 Desktop `1440x1000` 和 Pixel 5 上验证首页入口、模块侧栏/移动抽屉、空表单首错焦点、长名称无横向溢出、二维码生成、D110 Web Serial 打印入口、未登录扫码保留回跳、第一次确认领用、台账显示当前用户、再次扫码后的归还照片必填/输入聚焦/预览、确认归还及详情照片展示。
+- `tests/d110-label.node.ts` 验证 D110 系列打印入口仅在安全上下文且浏览器具备 Web Serial 时可用，覆盖 D110、D110_M 和 D110_M V4 协议选择，并验证长物资名称会限制在两行标签区域内。自动化测试不连接真实打印机；发布前需在 HTTPS 页面中用数据线连接目标型号，确认设备选择、型号识别、二维码可扫描及单张标签打印。
+- 扫码页的 GET 只能读取和展示确认状态，不得在页面加载、图片预览或链接预取时写入数据库。测试中的登录、扫码与 Server Action 均由官方 runner 控制，且不得发送飞书消息。
+
+定向执行：
+
+```bash
+npm run test:e2e -- tests/material-management-concurrency.spec.ts tests/material-management-ui.spec.ts
+```
 
 ## 采购模块测试
 

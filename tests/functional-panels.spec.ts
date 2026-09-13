@@ -31,7 +31,7 @@ test.describe("普通用户主功能面板", () => {
     await loginAsNormalUser(context, baseURL, normalAuth);
   });
 
-  test("首页能进入采购、进度和反馈入口", async ({ page }) => {
+  test("首页能进入采购、项目、物资和反馈入口", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
     await expectHealthyPage(page);
     await expect(
@@ -39,6 +39,11 @@ test.describe("普通用户主功能面板", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("link", { name: /项目管理/ }).first(),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", {
+        name: /物资管理 物资台账、二维码领用归还与在用状态/,
+      }),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: /反馈/ })).toBeVisible();
 

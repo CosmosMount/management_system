@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "termination-review-approval-v1";
+const PRISMA_SCHEMA_REVISION = "material-management-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -36,7 +36,9 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.taskNode?.findMany !== "function" ||
     typeof client.workSegment?.findMany !== "function" ||
     typeof client.inAppNotification?.findMany !== "function" ||
-    typeof client.domainAuditEvent?.findMany !== "function"
+    typeof client.domainAuditEvent?.findMany !== "function" ||
+    typeof client.material?.findMany !== "function" ||
+    typeof client.materialLoan?.findMany !== "function"
   );
 }
 
