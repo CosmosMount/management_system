@@ -6,6 +6,7 @@ import {
   ClipboardList,
   FilePlus2,
   LayoutDashboard,
+  Table2,
   ShoppingCart,
 } from "lucide-react";
 import {
@@ -25,6 +26,12 @@ function procurementNavigationItems(
       label: "采购看板",
       icon: LayoutDashboard,
       match: (pathname) => pathname === routes.procurement.dashboard,
+    },
+    {
+      href: routes.procurement.summary,
+      label: "明细汇总",
+      icon: Table2,
+      match: (pathname) => pathname === routes.procurement.summary,
     },
     {
       href: routes.procurement.pending,

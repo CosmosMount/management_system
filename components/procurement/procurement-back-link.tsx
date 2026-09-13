@@ -14,7 +14,16 @@ export function ProcurementDashboardHeader() {
   return (
     <ProcurementPageHeader
       title="采购看板"
-      description="采购统计图表与明细汇总"
+      description="采购统计图表"
+    />
+  );
+}
+
+export function ProcurementSummaryHeader() {
+  return (
+    <ProcurementPageHeader
+      title="明细汇总"
+      description="查看采购明细并导出 BOM"
     />
   );
 }
