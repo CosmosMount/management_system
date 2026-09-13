@@ -1,5 +1,6 @@
 import type { NotificationOutbox } from "@prisma/client";
 import { buildAppUrl } from "@/lib/app-origin";
+import { buildSummaryFeishuCard } from "@/lib/project-management/summary-feishu-card";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import {
   sendFeishuDirectMessage,
@@ -130,7 +131,7 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
         botKind,
         purpose: payload.purpose,
         message: {
-          type: "interactive",
+          type: isSummaryNotification(payload) ? "cardkit" : "interactive",
           card: buildProjectManagementCard(payload, row.createdAt),
         },
         logContext: {
@@ -153,7 +154,7 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
           recipientOpenId,
           botKind,
           purpose: payload.purpose,
-          message: { type: "interactive", card },
+          message: { type: isSummaryNotification(payload) ? "cardkit" : "interactive", card },
           logContext: {
             action: "sendProjectManagementNotificationComposite",
             channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
@@ -264,6 +265,10 @@ function deliveryTarget(result: FeishuSendResult): NotificationDeliveryTarget {
   };
 }
 
+function isSummaryNotification(payload: ProjectManagementNotificationPayload) {
+  return payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily";
+}
+
 export function buildProjectManagementCard(
   payload: ProjectManagementNotificationPayload,
   createdAt: Date,
@@ -296,6 +301,7 @@ export function buildProjectManagementCard(
       context: payload.context,
     },
   );
+  if (isSummaryNotification(payload)) return buildSummaryFeishuCard(truncate(title, 80), payload.summary, url);
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -306,8 +312,8 @@ export function buildProjectManagementCard(
       {
         tag: "div",
         text: {
-          tag: payload.kind === "meeting_work_segment_reminder" || payload.kind === "task_urged" || (payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily") ? "plain_text" : "lark_md",
-          content: payload.kind === "meeting_work_segment_reminder" ? `提醒人：${payload.actorName}\n${payload.summary}\n提醒时间：${formatCardDate(createdAt)}` : (payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily") ? payload.summary : payload.kind === "task_urged" ? [
+          tag: payload.kind === "meeting_work_segment_reminder" || payload.kind === "task_urged" ? "plain_text" : "lark_md",
+          content: payload.kind === "meeting_work_segment_reminder" ? `提醒人：${payload.actorName}\n${payload.summary}\n提醒时间：${formatCardDate(createdAt)}` : payload.kind === "task_urged" ? [
             `催促人：${payload.actorName || "未知用户"}`,
             `项目：${payload.projectName || "未关联项目"}`,
             `任务：${payload.taskTitle || "任务"}`,

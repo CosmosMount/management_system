@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildSummaryFeishuCard } from "../lib/project-management/summary-feishu-card";
 import { adminSummaryNotificationPreview, buildAdminSummaryMarkdown, summaryCell, type AdminSummaryRow } from "../lib/project-management/admin-summary-markdown";
 import {
   botKindForPayload,
@@ -20,6 +21,41 @@ const payload = {
   linkPath: "/progress/notifications?view=settings",
   recipientOpenIds: ["ou_summary_test_admin"],
 };
+
+test("进度总结使用报销同款卡片2.0原生表格而非Markdown管道文本", () => {
+  const markdown = "# 进度总结\n\n**操作人**：系统\n\n| 项目 | Task | 当前进行中节点 | 风险 |\n| --- | --- | --- | --- |\n| 示例项目 | 示例 Task | 首个节点 | 无 |";
+  const card = buildSummaryFeishuCard("进度总结", markdown, "https://example.com/progress/notifications");
+  assert.equal(card.schema, "2.0");
+  const table = card.body.elements.find((element) => element.tag === "table");
+  assert.ok(table);
+  assert.deepEqual(table.rows, [{ column_0: "示例项目", column_1: "示例 Task", column_2: "首个节点", column_3: "无" }]);
+  assert.equal((table.columns as { name: string }[]).length, 4);
+  const text = card.body.elements.filter((element) => element.tag === "markdown").map((element) => element.content).join("\n");
+  assert.ok(!text.includes("| ---"));
+  assert.ok(!text.includes("# 进度总结"));
+  assert.ok(text.includes("**进度总结**"));
+  assert.equal(card.body.elements.at(-1)?.tag, "button");
+});
+
+test("原生表格恢复转义文本，限制行数且明确全文入口", () => {
+  const markdown = "| Task |\n| --- |\n" + `| ${summaryCell("任务|<at id=all>测试</at> & &#124;")} |\n`.repeat(21);
+  const card = buildSummaryFeishuCard("总结", markdown, "https://example.com/progress/notifications");
+  const table = card.body.elements.find((element) => element.tag === "table")!;
+  const rows = table.rows as Record<string, string>[];
+  assert.equal(rows.length, 20);
+  assert.equal(table.page_size, 10);
+  assert.equal(rows[0].column_0, "任务|<at id=all>测试</at> & &#124;");
+  assert.ok((table.columns as { data_type: string }[]).every((column) => column.data_type === "text"));
+  assert.ok(JSON.stringify(card).includes("剩余 1 条"));
+});
+
+test("空总结不创建空原生表格，保留空态和详情按钮", () => {
+  const markdown = buildAdminSummaryMarkdown([], "2026/9/13 09:00", 0);
+  const card = buildSummaryFeishuCard("总结", markdown, "https://example.com/progress/notifications");
+  assert.ok(!card.body.elements.some((element) => element.tag === "table"));
+  assert.ok(JSON.stringify(card).includes("当前无待处理事项"));
+  assert.equal(card.body.elements.at(-1)?.tag, "button");
+});
 
 test("大总结只发送有限摘要，保留完整行并明确完整内容入口", () => {
   const short = "# 总结\n\n当前无待处理事项。";
