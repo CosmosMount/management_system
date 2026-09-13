@@ -16,6 +16,11 @@
 
 ## 独立会议记录
 
+- 会议模板由 `MeetingTemplate`／`MeetingTemplateParticipant` 独立保存，增量迁移为 `20260913140000_meeting_templates`。模板名称最多 100 字、说明最多 500 字，业务内容复用 `meetingContentSchema`；无工作区间、周期字段，也不向 `MeetingRecord` 增加模板外键。
+- 模板服务的列表、详情及写操作均在事务内刷新身份并限制为在职全局超级管理员。创建以请求 UUID 和事务级 advisory lock 防重复；更新／软删除使用 `expectedVersion`，参与人替换和 `meeting_template.create`／`meeting_template.update`／`meeting_template.delete` 审计同事务提交，不调用通知服务。
+- 模板详情返回全部非时间字段及不可用引用的字段错误；模板保存及实例化后的会议创建均重新验证引用，不能利用已有模板绕过校验。列表每页 10 项，按 `updatedAt`／`id` 倒序游标分页，仅返回卡片摘要。
+- 模板管理路由为 `/progress/meetings/templates/new` 和 `/progress/meetings/templates/[id]/edit`。`/progress/meetings/new?templateId=...` 只在页面初始化时读取模板，弹窗选择则通过 Server Action 读取；客户端显式复制各数组和内容，随后保存会议不提交模板 ID、不重新加载模板。会议表单与模板表单共用非时间字段组件，模板不展示时间或时间线预览。
+
 - `MeetingRecord.timelineDisplay` 使用 JSON `{ projectIds, taskIds }` 保存展示选择，无项目／任务关系表；ID 在边界规范化，事务校验新增选择，与会议版本、幂等创建和审计一同持久化。旧客户端更新省略配置时保留原值，显式空数组用于清除。
 - 会议详情及表单预览使用 `ResourcePlannerCanvasClient` 的完整预加载模式，默认周尺度、只读投入详情和计划节点详情。会议与工作台共同调用 `resolveContentNavigationWindow`，按上海日历月留白、保留今天和完整内容范围，并限制单次显示窗口为三年；已完整加载的画布可以在本地定位最早／最新内容，无需导航离开表单或丢弃未保存纪要。会议数据仍由专用服务完整加载，保留原查询范围和 5000 容量保护，不调用个人范围的分块接口，不新增数据库结构。
 - 时间线服务实时展开可用项目的当前任务，与直接选择任务去重，复用任务计划加载器；参与人投入与所选任务全部人员投入取并集，所有节点／记录修改能力关闭。软删除对象不展开、不暴露名称，只报告不可用数量；已保留的不可用选择允许随会议保存或移除。任务与节点／工作记录分别保留 5000 容量保护。

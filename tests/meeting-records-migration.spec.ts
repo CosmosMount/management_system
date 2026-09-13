@@ -63,6 +63,14 @@ test("独立会议迁移保留旧表和既有数据，重复部署及完整迁�
     expect((await target.query('SELECT content FROM "Meeting"')).rows).toEqual([{ content: "保留旧独立会议" }]);
     expect((await target.query('SELECT content FROM "ProjectMeeting"')).rows).toEqual([{ content: "保留旧项目会议" }]);
     expect((await target.query('SELECT id FROM "Account" WHERE id=$1', [accountId])).rows).toHaveLength(1);
+    expect((await target.query('SELECT COUNT(*)::int AS count FROM "MeetingTemplate"')).rows).toEqual([{ count: 0 }]);
+    expect((await target.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'MeetingTemplate' AND column_name IN ('rangeStart', 'rangeEnd')`)).rows).toEqual([]);
+    expect((await target.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'MeetingRecord' AND column_name ILIKE '%template%'`)).rows).toEqual([]);
+    const templateId = randomUUID();
+    await target.query(`INSERT INTO "MeetingTemplate" (id, name, topic, "createdByAccountId", "updatedAt") VALUES ($1, '升级后模板', '预填主题', $2, NOW())`, [templateId, accountId]);
+    expect((await target.query('SELECT version, description, minutes, "timelineDisplay", "deletedAt" FROM "MeetingTemplate" WHERE id=$1', [templateId])).rows).toEqual([{ version: 0, description: "", minutes: "", timelineDisplay: { projectIds: [], taskIds: [] }, deletedAt: null }]);
+    await target.query('UPDATE "MeetingTemplate" SET "deletedAt"=NOW(), version=1 WHERE id=$1', [templateId]);
+    expect((await target.query('SELECT minutes, version FROM "MeetingRecord" WHERE id=$1', [oldMeetingId])).rows).toEqual([{ minutes: "保留纪要", version: 3 }]);
     const meetingId = randomUUID();
     await expect(target.query(`INSERT INTO "MeetingRecord" (id, topic, "rangeStart", "rangeEnd", "createdByAccountId", "updatedAt") VALUES ($1, '非法范围', NOW(), NOW(), $2, NOW())`, [meetingId, accountId])).rejects.toMatchObject({ code: "23514" });
     await target.query(`INSERT INTO "MeetingRecord" (id, topic, "rangeStart", "rangeEnd", "createdByAccountId", "updatedAt") VALUES ($1, '独立会议', NOW(), NOW() + INTERVAL '1 day', $2, NOW())`, [meetingId, accountId]);

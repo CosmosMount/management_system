@@ -29,13 +29,14 @@ function validateRange(value: { rangeStart: Date; rangeEnd: Date }, context: z.R
   }
 }
 
-export const meetingFieldsSchema = z.object({
+export const meetingContentSchema = z.object({
   topic: z.string().trim().min(1, "请输入会议主题").max(200, "会议主题不能超过 200 字"),
   personIds,
-  ...rangeFields,
   minutes: z.string().max(50_000, "会议纪要不能超过 50000 字").default(""),
   timelineDisplay: meetingTimelineDisplaySchema.optional(),
-}).strict().superRefine(validateRange);
+}).strict();
+
+export const meetingFieldsSchema = meetingContentSchema.extend(rangeFields).superRefine(validateRange);
 
 export const updateMeetingSchema = meetingFieldsSchema.safeExtend({
   meetingId: idSchema,

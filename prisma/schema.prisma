@@ -202,6 +202,7 @@ enum AuditSource {
 }
 
 model Account {
+  meetingTemplates          MeetingTemplate[]
   id                        String                        @id @default(uuid())
   lastLoginAt               DateTime?                     @db.Timestamptz(6)
   identities                AccountIdentity[]
@@ -274,6 +275,7 @@ model AccountIdentity {
 }
 
 model Person {
+  meetingTemplateParticipants MeetingTemplateParticipant[]
   id                  String             @id @default(uuid())
   accountId           String?            @unique
   account             Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -294,6 +296,35 @@ model Person {
 
   @@index([displayName])
   @@index([status])
+}
+
+model MeetingTemplate {
+  id                 String   @id @default(uuid())
+  name               String   @db.VarChar(100)
+  description        String   @default("") @db.VarChar(500)
+  topic              String   @db.VarChar(200)
+  minutes            String   @default("")
+  timelineDisplay    Json     @default("{\"projectIds\":[],\"taskIds\":[]}")
+  version            Int      @default(0)
+  createdByAccountId String
+  createdBy          Account  @relation(fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  participants       MeetingTemplateParticipant[]
+  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
+  deletedAt          DateTime? @db.Timestamptz(6)
+
+  @@index([deletedAt, updatedAt, id])
+  @@index([createdByAccountId])
+}
+
+model MeetingTemplateParticipant {
+  templateId String
+  personId   String
+  template   MeetingTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  person     Person          @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@id([templateId, personId])
+  @@index([personId])
 }
 
 model MeetingRecord {

@@ -44,7 +44,9 @@ export function PageCommandBar({
     ? projectNavigationItems(0).find((item) => item.match(pathname))
     : undefined;
   const isDetail = section && pathname !== section.href;
-  const locationLabel = pathname.includes("/revisions/")
+  const locationLabel = pathname.startsWith(`${routes.progress.meetings}/templates/`)
+    ? pathname.endsWith("/new") ? "创建会议模板" : "编辑会议模板"
+    : pathname.includes("/revisions/")
     ? "计划修订"
     : pathname.endsWith("/edit")
       ? "编辑"

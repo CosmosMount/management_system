@@ -132,7 +132,7 @@ export async function listMeetings(input: unknown, actor?: ProjectManagementActo
   };
 }
 
-async function validatePeople(tx: Prisma.TransactionClient, personIds: string[], previousIds: string[] = []) {
+export async function validatePeople(tx: Prisma.TransactionClient, personIds: string[], previousIds: string[] = []) {
   const count = await tx.person.count({ where: {
     id: { in: personIds },
     OR: [{ status: "ACTIVE" }, { id: { in: previousIds } }],
