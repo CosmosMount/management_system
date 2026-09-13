@@ -64,6 +64,7 @@ export async function listProjects({
   };
   let hasMoreByQuery = false;
   let hasMoreUnfiltered = false;
+  const cursor = decodeTimestampCursor(input?.cursor);
   let rows: Prisma.ProjectGetPayload<{ include: typeof projectCardInclude }>[];
   if (query) {
     const direct = await prisma.project.findMany({
@@ -93,27 +94,13 @@ export async function listProjects({
     rows = ids.flatMap((id) => byId.get(id) ?? []);
     hasMoreByQuery = ranked.length > ids.length || direct.length === 501 || fallback.length === 501;
   } else {
-    const cursor = decodeTimestampCursor(input?.cursor);
     const pageRows = await prisma.project.findMany({
-      where: {
-        AND: [
-          where,
-          cursor
-            ? {
-                OR: [
-                  { updatedAt: { lt: cursor.timestamp } },
-                  { updatedAt: cursor.timestamp, id: { gt: cursor.id } },
-                ],
-              }
-            : {},
-        ],
-      },
+      where,
       include: projectCardInclude,
       orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-      take: limit + 1,
+      take: 501,
     });
-    hasMoreUnfiltered = pageRows.length > limit;
-    rows = pageRows.slice(0, limit);
+    rows = pageRows;
   }
   const taskWhere: Prisma.TaskWhereInput = { AND: [taskReadableWhere(actor), { projectId: { in: rows.map((row) => row.id) }, deletedAt: null }] };
   const [counts, tasks] = rows.length ? await Promise.all([
@@ -161,6 +148,25 @@ export async function listProjects({
       }),
     });
     tasksByProject.set(task.projectId, projectTasks);
+  }
+  if (!query) {
+    const nowMs = Date.now();
+    const overdueDuration = (projectId: string) =>
+      (tasksByProject.get(projectId) ?? []).reduce((total, task) => {
+        const dueAt = task.currentNodeDeadline?.dueAt;
+        if (!dueAt || task.status !== "ACTIVE") return total;
+        const overdueMs = nowMs - Date.parse(dueAt);
+        return overdueMs > 0 ? total + overdueMs : total;
+      }, 0);
+    rows.sort((left, right) =>
+      overdueDuration(right.id) - overdueDuration(left.id) ||
+      right.updatedAt.getTime() - left.updatedAt.getTime() ||
+      left.id.localeCompare(right.id),
+    );
+    const cursorIndex = cursor ? rows.findIndex((row) => row.id === cursor.id) : -1;
+    const start = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    hasMoreUnfiltered = rows.length > start + limit;
+    rows = rows.slice(start, start + limit);
   }
   const lastProject = rows.at(-1);
   return {

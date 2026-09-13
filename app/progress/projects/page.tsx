@@ -15,9 +15,9 @@ type SearchParams = Record<string, string | string[] | undefined>;
 export default async function ProjectsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  const rawStatus = params.status === undefined ? "ACTIVE" : first(params.status);
+  const rawStatus = first(params.status);
   const status = statuses.includes(rawStatus as (typeof statuses)[number]) ? rawStatus as (typeof statuses)[number] : undefined;
-  const mine = params.mine === undefined ? true : values(params.mine).includes("1");
+  const mine = params.mine === undefined ? false : values(params.mine).includes("1");
   const query = first(params.q);
   const cursor = first(params.cursor) || undefined;
   const projects = await listProjects({ actor, input: { status, mine, query, limit: 50, cursor } });
