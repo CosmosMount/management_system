@@ -37,7 +37,7 @@ const expectedJobs = [
   ],
   [
     "runProjectManagementDailyMaintenance",
-    "15 8 * * *",
+    "* * * * *",
     "projectManagementDailyCron",
     "cron.project_management_daily.failed",
     "runProjectManagementDailyMaintenance",

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { TaskUrgeButton } from "@/components/project-management/task-urge-button";
+import { TaskDraftLeavePrompt } from "@/components/project-management/task-draft-leave-prompt";
 import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -241,12 +243,13 @@ export function TaskWorkbench({
       data-testid="task-workbench-v2"
       data-server-lock-version={workspace.task.lockVersion}
     >
+      <TaskDraftLeavePrompt key={task.id} taskId={task.id} lockVersion={lockVersion} enabled={task.status === "DRAFT" && workspace.permissions.canActivate} />
       <section
         className="rounded-xl border border-border bg-card p-5"
         data-testid="task-overview"
       >
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 flex-1">
+        <div className="grid min-w-0 gap-x-5 gap-y-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="contents">
             <div className="flex flex-wrap items-center gap-2">
               <Link href={routes.progress.tasks} className="text-sm text-primary hover:underline">
                 ← 全部任务
@@ -260,19 +263,15 @@ export function TaskWorkbench({
                 </Link>
               )}
             </div>
-            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3 [&_dd]:[overflow-wrap:anywhere]">
-              <OverviewItem label="负责人" value={<span className="line-clamp-2">{memberNames(workspace, "OWNER")}</span>} />
-              <OverviewItem label="当前节点" value={<span className="space-y-1"><span className="line-clamp-2">{currentNodeLabel(currentWorkspace)}</span><NodeDeadline target={currentWorkspace.task.currentNodeDeadline} showDate /></span>} />
-              <OverviewItem label="计划结束" value={formatDateTime(termination?.termination?.plannedAt ?? null)} />
-            </dl>
-            <details className="mt-3 text-sm">
-              <summary className="w-fit cursor-pointer rounded-sm text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">任务资料与成员</summary>
-              {task.description && <p className="mt-3 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{task.description}</p>}
-              <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <h2 className="min-w-0 text-2xl font-semibold [overflow-wrap:anywhere] lg:col-span-2">{task.title}</h2>
+            {task.description && <p className="min-w-0 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere] lg:col-span-2">{task.description}</p>}
+            <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-2 lg:col-span-2 lg:w-[70%] lg:grid-cols-4 [&_dd]:[overflow-wrap:anywhere]">
               <OverviewItem label="负责人" value={memberNames(workspace, "OWNER")} />
               <OverviewItem label="参与人员" value={memberNames(workspace, "PARTICIPANT")} />
               <OverviewItem label="车组/技术组" value={`${task.team} / ${task.techGroup}`} />
+              <OverviewItem label="当前节点" value={<span className="space-y-1"><span>{currentNodeLabel(currentWorkspace)}</span><NodeDeadline target={currentWorkspace.task.currentNodeDeadline} showDate /></span>} />
               <OverviewItem label="计划开始" value={formatDateTime(workspace.currentPlan.plannedStartAt)} />
+              <OverviewItem label="计划结束" value={formatDateTime(termination?.termination?.plannedAt ?? null)} />
               <OverviewItem
                 label="关联任务"
                 value={
@@ -285,16 +284,15 @@ export function TaskWorkbench({
                 label="所属项目"
                 value={task.project ? task.project.name : "未设置"}
               />
-              </dl>
-            </details>
+            </dl>
             {workspace.currentPlan.chronologyCompatibilityIssues.length > 0 && (
-              <p className="mt-3 text-sm text-amber-700">
+              <p className="min-w-0 text-sm text-amber-700 lg:col-span-2">
                 当前计划包含旧版时间顺序；可继续只读或结束任务，新建草稿/计划修订前必须调整为严格递增。
               </p>
             )}
           </div>
 
-          <div className="flex shrink-0 flex-wrap gap-2 lg:max-w-80">
+          <div className="flex min-w-0 flex-wrap gap-2 lg:col-start-2 lg:row-start-1 lg:justify-end" data-testid="task-overview-actions">
             {task.status === "DRAFT" && workspace.permissions.canUpdateMetadata && (
               <Link
                 href={routes.progress.taskEdit(task.id)}
@@ -345,6 +343,10 @@ export function TaskWorkbench({
                 删除草稿
               </Button>
             )}
+            {task.status === "ACTIVE" && (
+              <TaskUrgeButton taskId={task.id} taskTitle={task.title} disabled={busy}
+                onSubmitted={() => setNotice({ kind: "success", message: "催促已提交，飞书消息将由系统投递。" })} />
+            )}
             {canEditActive && (
               <Button
                 type="button"
@@ -364,7 +366,7 @@ export function TaskWorkbench({
                   发起计划修订
                 </Button>
               ) : (
-                <Link href={routes.progress.taskRevisionNew(task.id)} className={cn(buttonVariants({ variant: "outline" }))}>
+                <Link href={routes.progress.taskRevisionNew(task.id)} className={cn(buttonVariants())}>
                   发起计划修订
                 </Link>
               )
@@ -374,6 +376,7 @@ export function TaskWorkbench({
               <Button
                 type="button"
                 variant="outline"
+                className="border-transparent bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive"
                 disabled={approvalBlocked}
                 title={approvalBlocked ? "当前任务已有待审批事项" : undefined}
                 onClick={selectTerminal}

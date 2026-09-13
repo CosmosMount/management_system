@@ -1,5 +1,20 @@
 import type { NextConfig } from "next";
-import { FRONTEND_VERSION } from "./lib/frontend-version";
+
+function getFrontendVersion() {
+  const now = new Date();
+  const date = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+    .map((part) => String(part).padStart(2, "0"));
+  const buildStamp = Math.floor(now.getTime() / 1000);
+  return `${date[0]}.${date[1]}.${date[2]}.${buildStamp}`;
+}
+
+const frontendVersionOverride = process.env.NEXT_PUBLIC_FRONTEND_VERSION;
+if (frontendVersionOverride && !/^\d{4}\.\d{2}\.\d{2}\.\d+$/.test(frontendVersionOverride)) {
+  throw new Error("NEXT_PUBLIC_FRONTEND_VERSION 必须使用 YYYY.MM.DD.N 格式");
+}
+
+export const frontendVersion = frontendVersionOverride ?? getFrontendVersion();
+process.env.NEXT_PUBLIC_FRONTEND_VERSION = frontendVersion;
 
 const configuredDevOrigins = [
   process.env.LAN_HOST,
@@ -7,7 +22,10 @@ const configuredDevOrigins = [
 ].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
-  deploymentId: FRONTEND_VERSION.replaceAll(".", "-"),
+  deploymentId: frontendVersion.replaceAll(".", "-"),
+  env: {
+    NEXT_PUBLIC_FRONTEND_VERSION: frontendVersion,
+  },
 
   // The controlled Playwright runner may coexist with a developer server in
   // this workspace. A runner-owned build directory prevents Next.js locks and

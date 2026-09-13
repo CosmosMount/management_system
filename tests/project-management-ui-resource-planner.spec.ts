@@ -70,20 +70,23 @@ test.describe("project management UI project-management-ui-resource-planner", ()
 
       const finalTaskTitle = `${taskTitlePrefix} 50`;
       await page.goto("/progress");
-      await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-      const participatingTasks = page.getByRole("region", { name: "参与任务" });
-      await expect(participatingTasks.getByRole("listitem")).toHaveCount(6);
-      await expect(participatingTasks.getByRole("link", { name: /查看全部参与任务/ }))
-        .toHaveAttribute("href", "/progress/tasks?mine=1&status=ACTIVE");
-      await page.getByRole("navigation", { name: "工作台视图" })
-        .getByRole("link", { name: "个人日程", exact: true }).click();
-      await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule");
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      const participatingTasks = page.getByRole("region", { name: "参与任务", exact: true });
+      const taskTable = participatingTasks.getByRole("table", { name: "参与任务列表", exact: true });
+      await expect(taskTable.locator("tbody tr").filter({ hasText: taskTitlePrefix })).toHaveCount(51);
+      await expect(taskTable.locator("tbody").getByTestId(`participating-task-${taskIds[50]}`)).toContainText(finalTaskTitle);
+      await expect(participatingTasks.getByRole("link", { name: /查看全部参与任务/ })).toHaveCount(0);
+      await expect(participatingTasks.getByRole("link", { name: "显示全部", exact: true })).toBeVisible();
+      await expect(taskTable.getByRole("link", { name: finalTaskTitle, exact: true }))
+        .toHaveAttribute("href", `/progress/tasks/${taskIds[50]}`);
+      await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
+      await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view"));
       await expectVirtualRowAtBottom(
         page,
         `timeline-row-plan:${taskIds[50]}`,
       );
       await expect(
-        page.getByRole("link", { name: finalTaskTitle, exact: true }),
+        page.getByTestId("time-canvas-root").getByRole("link", { name: finalTaskTitle, exact: true }),
       ).toBeVisible();
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
@@ -672,7 +675,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(120_000);
     const fixture = await createUiFixture();
     const browserErrors: string[] = [];
@@ -681,7 +684,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       openId: fixture.member.openId,
       name: fixture.member.person.displayName,
     });
-    await page.goto("/progress?view=schedule&scale=week");
+    await page.goto("/progress?scale=week");
     await page.getByRole("button", { name: "新增投入" }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
     await expectRetiredSegmentControlsAbsent(quickCreate);
@@ -716,7 +719,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     await page.getByRole("option", { name: fixture.taskTitle, exact: true }).click();
     const startInput = editForm.getByLabel("开始", { exact: true });
     const endInput = editForm.getByLabel("结束", { exact: true });
-    if (testInfo.project.name === "desktop") {
+    {
       const block = detailDialog.getByTestId(`segment-block-${created.id}`);
       await block.scrollIntoViewIfNeeded();
       await expect.poll(() => block.evaluate((element) => {
@@ -751,9 +754,6 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(startInput).toHaveValue(movedStart);
       expect(Date.parse(shanghaiDateTimeLocalToIso(await endInput.inputValue())))
         .toBeGreaterThan(Date.parse(shanghaiDateTimeLocalToIso(movedEnd)));
-    } else {
-      await startInput.fill("2027-01-05T10:00");
-      await endInput.fill("2027-01-05T19:00");
     }
     const expectedStartAt = new Date(shanghaiDateTimeLocalToIso(await startInput.inputValue()));
     const expectedEndAt = new Date(shanghaiDateTimeLocalToIso(await endInput.inputValue()));
@@ -841,11 +841,11 @@ test.describe("project management UI project-management-ui-resource-planner", ()
     await expectHealthyPage(page);
   });
 
-  test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
+  test("S7 resource filters, removed routes and unified my-work timeline work on the shared frontend", async ({
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       test.setTimeout(90_000);
       const fixture = await createUiFixture();
       const paginationKey = randomUUID();
@@ -881,9 +881,22 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await page.goto("/progress?taskCursor=invalid-cursor");
       await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      const participatingTasks = page.getByRole("table", { name: "参与任务列表", exact: true });
+      await expect(participatingTasks.locator("tbody").getByTestId(`participating-task-${fixture.taskId}`)).toBeVisible();
+      await page.getByRole("button", { name: "年", exact: true }).click();
+      await expect(page).toHaveURL(/scale=year/);
+      const workbenchCenter = await stableUrlSearchParam(page, "center");
+      await page.getByRole("link", { name: "显示全部", exact: true }).click();
+      await expect(page).toHaveURL((url) => !url.searchParams.has("view") && url.searchParams.get("tasks") === "all" && url.searchParams.get("scale") === "year" && url.searchParams.get("center") === workbenchCenter);
+      await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
+      await expect(participatingTasks).toBeVisible();
+      await expectHealthyPage(page);
       await page.goto("/progress?view=schedule&scale=month");
+      await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && url.searchParams.get("scale") === "month");
       await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "MONTH");
-      await page.goto("/progress?view=schedule&scale=year");
+      await page.goto("/progress?view=management&scale=year");
+      await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && url.searchParams.get("scale") === "year");
       await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
       await page.goBack();
       await expect(page).toHaveURL(/scale=month/);
@@ -1007,6 +1020,11 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       }).click();
       await page.getByRole("combobox", { name: "筛选人员" }).press("Escape");
       await page.getByRole("button", { name: "应用选择" }).click();
+      await expect(page).toHaveURL((url) =>
+        url.pathname === "/progress/resources" &&
+        url.searchParams.get("people") === fixture.member.person.id &&
+        url.searchParams.get("tasks") === fixture.taskId,
+      );
       await expect(page).toHaveURL(/all=0/);
       await expect(page).toHaveURL(/scale=year/);
       await expect
@@ -1028,14 +1046,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(dirtyInspector).toBeVisible();
       const unsavedContent = `未保存的历史导航内容 ${randomUUID()}`;
       await dirtyInspector.getByLabel("内容").fill(unsavedContent);
-      if (testInfo.project.name === "desktop") {
+      {
         await page.goBack();
         await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
         await expect(
           page.getByText("当前投入有未保存修改，请保存或关闭后再切换时间窗口。"),
         ).toBeVisible();
-      } else {
-        await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
       }
       await expectHealthyPage(page);
       let discardConfirmationSeen = false;

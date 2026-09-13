@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { routes } from "@/lib/routes";
 import { forwardRef } from "react";
+import type { ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { createTimeScale, timeToX } from "@/components/project-management/time-canvas/time-math";
 import type {
@@ -14,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import {
   formatCanvasTick as formatTick,
   formatCanvasAxisGroup as formatAxisGroup,
+  formatCanvasDateTime,
 } from "@/components/project-management/time-canvas/time-format";
 import { AXIS_HEIGHT } from "@/components/project-management/time-canvas/time-canvas-layout";
 import { TodayLine } from "@/components/project-management/time-canvas/time-canvas-layers";
@@ -32,16 +35,20 @@ export function TimeCanvasToolbar({
   canGoToday,
   onToday,
   onZoomChange,
+  action,
 }: {
   presentation: TimeCanvasProps["presentation"];
   zoom: TimeCanvasZoom;
   canGoToday: boolean;
   onToday: () => void;
   onZoomChange: (zoom: TimeCanvasZoom) => void;
+  action?: ReactNode;
 }) {
   if (presentation === "COMPACT") return null;
   return (
-    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-end gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
+    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
+      {action}
+      <div className="ml-auto flex items-center gap-2">
       <div className="flex items-center overflow-hidden rounded-md border border-border" aria-label="显示尺度">
         {zoomOrder.map((item) => (
           <Button
@@ -73,6 +80,7 @@ export function TimeCanvasToolbar({
           今天
         </Button>
       </span>
+      </div>
     </div>
   );
 }
@@ -93,6 +101,9 @@ export function TimeAxis({
   rowHeaderWidth: number;
   leadingLabel: string;
 }) {
+  const inRangeTicks = ticks.filter((tick) => tick >= scale.startMs && tick < scale.endMs);
+  const boundaryOnly = inRangeTicks.length === 0;
+  const displayedTicks = boundaryOnly ? [scale.startMs] : inRangeTicks;
   const minorLabelStep = Math.max(
     1,
     Math.ceil(48 / Math.max(1, tickPixelDistance(ticks, scale))),
@@ -109,9 +120,9 @@ export function TimeAxis({
         <span className="truncate">{leadingLabel}</span>
       </div>
       <div className="relative overflow-hidden" aria-label={`${timezone} ${zoomLabels[zoom]}级时间轴`} role="img">
-        {ticks.map((tick, index) => {
+        {displayedTicks.map((tick, index) => {
           const group = formatAxisGroup(tick, zoom);
-          const previousGroup = index > 0 ? formatAxisGroup(ticks[index - 1] ?? tick, zoom) : null;
+          const previousGroup = index > 0 ? formatAxisGroup(displayedTicks[index - 1] ?? tick, zoom) : null;
           return (
           <div
             key={tick}
@@ -125,7 +136,7 @@ export function TimeAxis({
             )}
             {index % minorLabelStep === 0 && (
               <span className="absolute left-1 top-8 whitespace-nowrap text-[11px] text-muted-foreground">
-                {formatTick(tick, zoom)}
+                {boundaryOnly ? formatCanvasDateTime(tick) : formatTick(tick, zoom)}
               </span>
             )}
           </div>
@@ -177,12 +188,30 @@ export function RowHeader({
   row: TimeCanvasRow;
   onNavigate?: (row: TimeCanvasRow) => boolean;
 }) {
+  const project = row.kind === "PERSON" ? null : row.project;
+  const projectHref = project ? routes.progress.projectDetail(project.id) : undefined;
   return (
     <div
       className="sticky left-0 z-[25] flex min-w-0 flex-col justify-center border-r border-border bg-card px-3"
       data-testid={`time-canvas-row-header-${row.id}`}
     >
       <div className="flex min-w-0 items-center gap-2">
+        {project && projectHref && (
+          <>
+            <Link
+              href={projectHref}
+              prefetch={false}
+              className="min-w-0 max-w-[45%] truncate rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={project.name}
+              onClick={(event) => {
+                if (onNavigate?.({ ...row, href: projectHref }) === false) event.preventDefault();
+              }}
+            >
+              {project.name}
+            </Link>
+            <span className="shrink-0 text-sm text-muted-foreground" aria-hidden="true">/</span>
+          </>
+        )}
         {row.href ? (
           <Link
             href={row.href}

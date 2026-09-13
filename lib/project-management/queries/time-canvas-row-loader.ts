@@ -125,6 +125,7 @@ export async function loadTaskRows(
     kind: "TASK" as const,
     id: task.id,
     label: task.title,
+    project: task.project,
     sublabel: `${task.status} / ${task.priority}`,
     capabilities: {
       canCreateSegment:

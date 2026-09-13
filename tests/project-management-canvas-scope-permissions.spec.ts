@@ -20,6 +20,36 @@ import {
 } from "./helpers/project-management-canvas-security-fixtures";
 
 test.describe("project management canvas security project-management-canvas-scope-permissions", () => {
+  test("task rows and plan anchors expose only the current non-deleted project identity", async () => {
+    const owner = await createAccountPerson("时间线项目表头负责人");
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: "时间线表头任务",
+      team: "英雄",
+      techGroup: "电控",
+      members: [{ personId: owner.person.id, role: "OWNER" }],
+    });
+    const input = canvasInput({ scope: { kind: "RESOURCE_PLANNER" }, groupBy: "TASK", taskIds: [task.taskId] });
+    const load = () => getTimeCanvasData({ actor: actor(owner), input });
+    const standalone = await load();
+    expect(standalone.rows[0]).toMatchObject({ id: task.taskId, project: null });
+    expect(standalone.anchors[0]).toMatchObject({ id: task.taskId, project: null });
+    const project = await prisma.project.create({
+      data: { name: "关联项目", description: "不得出现在时间线 DTO 中", requesterAccountId: owner.account.id, status: "ACTIVE" },
+    });
+    await prisma.task.update({ where: { id: task.taskId }, data: { projectId: project.id } });
+    const associated = await load();
+    const row = associated.rows[0];
+    expect(row.kind).toBe("TASK");
+    if (row.kind !== "TASK") throw new Error("任务分组未返回任务行");
+    expect(row.project).toEqual({ id: project.id, name: project.name });
+    expect(associated.anchors[0].project).toEqual(row.project);
+    await prisma.project.update({ where: { id: project.id }, data: { deletedAt: new Date() } });
+    const deleted = await load();
+    expect(deleted.rows[0]).toMatchObject({ id: task.taskId, project: null });
+    expect(deleted.anchors[0].project).toBeNull();
+  });
+
   test.beforeAll(async () => {
     const administrator = await createAccountPerson("画布权限测试全局审批管理员");
     await prisma.systemRoleAssignment.create({

@@ -1,13 +1,21 @@
 # 测试手册
 
+个人总结及所有进度提醒的独立执行涉及个人收件隔离、禁用手动执行、同请求重试、每日多时间点补执行、首次初始化不复活已删除配置，以及每 Task 仅首个 ACTIVE 节点。本轮按用户要求未运行测试或完整门禁；已有相关断言随接口更新不代表验证通过，发布前仍需按本手册在隔离环境验收。
+
+会议投入提醒定向验证使用 `npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，覆盖参会者权限、区间边界、停用/无账号、重复请求与独立重发、站内/通知机器人队列以及桌面和窄窗口弹窗操作。只通过官方隔离数据库和飞书禁发保护执行；完成门禁为 `npm run check` 与完整 `npm run test:e2e`。
+
+管理员全局总结定向验证：`npm run test:e2e -- tests/admin-global-summary.spec.ts`；Markdown/通知契约使用 `npm run test:node`。覆盖有效与撤权管理员、普通/局部/停用拒绝、手动/自动幂等、Outbox 失败回滚与安全失败记录、配置与立即执行 UI。本功能按需求仅验收桌面 `1440×1000`，不做窄屏专项。测试仅通过官方 runner 使用隔离 PostgreSQL、受控服务和飞书禁发保护，不使用开发库。此通知/数据库改动仍要求 `npm run check`、完整 `npm run test:e2e` 和隔离库迁移兼容性/schema drift 验证，定向结果不能代替完整门禁。
+
 本文档用于人工测试、Playwright 仿真测试和 subagent 测试执行。执行测试时不要提交本地 cookie、截图、HTML 快照、数据库文件或 `.tmp/` 内容。
 
 本文档同时定义全功能回归范围；页面 smoke 只覆盖主要入口和少量浅交互，不能等同于全功能通过。完整结论必须覆盖下述静态、业务闭环、并发和迁移层级。
 
+浏览器测试统一使用 `desktop` project。窄窗口检查在同一测试中调整窗口宽度，不切换组件、权限或功能：侧栏与完整表格仍显示，内容可在所属容器滚动访问，时间线保留缩放、范围操作及通用表单。`project-management-s3-shell.spec.ts` 覆盖窄窗口导航与会议入口，`functional-panels.spec.ts` 覆盖职责和账号表格，`project-management-ui-routes-responsive.spec.ts` 覆盖投入创建范围操作与网络失败重试；仍须通过官方 runner 使用隔离数据库和通知禁发保护。
+
 ## 全功能回归分层
 
 - **L0 静态与构建**：`npm run check`、migration drift 和 `npm run build` 全部通过；warning 必须记录并分级。
-- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
+- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、管理员和附件入口；Desktop `1440x1000` 均无 500、Next error overlay 或横向溢出。
 - **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、管理员筛选均可刷新复现，且控制台无未处理错误。
 - **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
 - **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
@@ -16,11 +24,11 @@
 
 ### 自动化测试定义清单
 
-前端发布版本由 `frontend-version.node.ts` 覆盖标识验证、保留 URL 参数及锚点、刷新限流；`frontend-version.spec.ts` 在 desktop/mobile 验证公开版本接口的 no-store 响应、同源清缓存入口、自动整页更新、Cookie／草稿存储保留、旧资源防循环、编辑保护及异常响应／断网不导航。定向运行 `npm run test:e2e -- tests/frontend-version.spec.ts tests/project-management-ui-project-list.spec.ts`，仍由官方 runner 管理隔离数据库及禁发保护。该功能涉及根布局、代理边界和 Next.js 配置，完成时还需 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`；本机普通开发服务仅作公开版本及静态 CSS 的只读检查，不承载数据库测试。
+前端发布版本由 `frontend-version.node.ts` 覆盖标识验证、保留 URL 参数及锚点、刷新限流；`frontend-version.spec.ts` 在 desktop 验证公开版本接口的 no-store 响应、同源清缓存入口、自动整页更新、Cookie／草稿存储保留、旧资源防循环、编辑保护及异常响应／断网不导航。定向运行 `npm run test:e2e -- tests/frontend-version.spec.ts tests/project-management-ui-project-list.spec.ts`，仍由官方 runner 管理隔离数据库及禁发保护。该功能涉及根布局、代理边界和 Next.js 配置，完成时还需 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`；本机普通开发服务仅作公开版本及静态 CSS 的只读检查，不承载数据库测试。
 
-项目总览行内 Task 摘要由 `project-task-summary.node.ts` 覆盖取消任务排除、其他终态计数、紧急排序和时钟更新；`project-management-project-list.spec.ts` 验证草稿／进行中摘要、最小 DTO、可见范围、软删除及项目游标分页，`current-node-deadline.spec.ts` 同时校验列表摘要的当前计划期限口径。`project-management-ui-project-list.spec.ts` 在 desktop/mobile 验证两行上限、`+N` 弹层、长名称与多人提示、键盘操作、期限刷新、项目／任务导航、空概览和完成进度。定向命令为 `npm run test:e2e -- tests/project-management-project-list.spec.ts tests/project-management-ui-project-list.spec.ts tests/current-node-deadline.spec.ts`，必须通过官方 runner 使用随机隔离数据库及飞书禁发保护；Node 用例使用 `npm run test:node`。这些定向结果不能替代跨层改动所需的 `npm run check` 和完整 `npm run test:e2e`。
+项目总览行内 Task 摘要由 `project-task-summary.node.ts` 覆盖取消任务排除、其他终态计数、紧急排序和时钟更新；`project-management-project-list.spec.ts` 验证草稿／进行中摘要、最小 DTO、可见范围、软删除及项目游标分页，`current-node-deadline.spec.ts` 同时校验列表摘要的当前计划期限口径。`project-management-ui-project-list.spec.ts` 在 desktop 验证两行上限、`+N` 弹层、长名称与多人提示、键盘操作、期限刷新、项目／任务导航、空概览和完成进度。定向命令为 `npm run test:e2e -- tests/project-management-project-list.spec.ts tests/project-management-ui-project-list.spec.ts tests/current-node-deadline.spec.ts`，必须通过官方 runner 使用随机隔离数据库及飞书禁发保护；Node 用例使用 `npm run test:node`。这些定向结果不能替代跨层改动所需的 `npm run check` 和完整 `npm run test:e2e`。
 
-当前节点到期展示由 `current-node-deadline.node.ts` 覆盖准确截止时刻、72 小时边界、里程碑指针优先/结束节点回退、终态与非法数据排除和预览排序；`current-node-deadline.spec.ts` 核对各授权读模型及画布适配的一致性、历史/候选计划隔离、等待审批的当前节点和非当前审批排除；`current-node-deadline-ui.spec.ts` 在 desktop/mobile 覆盖六项预览、分钟更新与 focus 恢复、任务/项目/待办/选择器/各种画布、只读人员时间线、终态与无横向溢出。定向验证使用 `npm run test:e2e -- tests/current-node-deadline.spec.ts tests/current-node-deadline-ui.spec.ts`，由官方 runner 创建隔离数据库并保留飞书禁发保护；Node 用例通过 `npm run test:node` 执行。跨模块交付仍需本节既有完整门禁，定向通过不代表完整 E2E 通过。
+当前节点到期展示由 `current-node-deadline.node.ts` 覆盖准确截止时刻、72 小时边界、里程碑指针优先/结束节点回退、终态与非法数据排除和预览排序；`current-node-deadline.spec.ts` 核对各授权读模型及画布适配的一致性、历史/候选计划隔离、等待审批的当前节点和非当前审批排除；`current-node-deadline-ui.spec.ts` 在 desktop 覆盖超过六项的完整任务表与版本列、风险排序、分钟更新与 focus 恢复、任务/项目/待办/选择器/各种画布、只读人员时间线、终态与无横向溢出。定向验证使用 `npm run test:e2e -- tests/current-node-deadline.spec.ts tests/current-node-deadline-ui.spec.ts`，由官方 runner 创建隔离数据库并保留飞书禁发保护；Node 用例通过 `npm run test:node` 执行。跨模块交付仍需本节既有完整门禁，定向通过不代表完整 E2E 通过。
 
 截至 2026-09-07，`tests/` 有两类可执行测试定义：8 个 `tests/*.node.ts` 文件（26 个 `node:test` 用例）和 78 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
 
@@ -36,11 +44,11 @@
 - **Playwright / 账号与管理员（4 个 spec）**：`account-management`、`admin-account-options`、`feishu-user-sync-action-result`、`feishu-user-sync`。
 - **Playwright / 采购、报销与反馈写入（12 个 spec）**：`inactive-person-procurement-safety`、`processing-vendor-hook-races`、`procurement-budget-import-atomicity`、`procurement-budget-pool-dashboard`、`procurement-dashboard-spend`、`procurement-form-accessibility`、`procurement-import-dialog-races`、`procurement-notify-approver`、`procurement-pending-orders`、`procurement-shell`、`procurement-teacher-email`、`procurement-upload-atomicity`。
 - **Playwright / 飞书与通知（7 个 spec）**：`feishu-boundaries`、`feishu-delivery-guard`、`feishu-message`、`feishu-procurement-card-stage`、`feishu-procurement-confirm-card`、`notification-outbox-adapters`、`notification-user-facing-copy`。
-- **Playwright / 项目管理、迁移与发布（46 个 spec）**：在原有 43 个 spec 基础上增加 `project-management-person-kanban-query`、`project-management-person-kanban` 与 `unified-work-segments-migration`；前者锁定单人时间线的数据范围、停用人员与自查边界，后者覆盖 Desktop/Pixel 5 上的默认人员、人员切换、只读详情和规范 URL。`project-management-query-pagination` 与 `project-management-ui-pagination` 继续锁定通知、Task、风险、近期动态的复合游标稳定排序与对象/筛选锚点校验，以及首屏外记录的可达性。
+- **Playwright / 项目管理、迁移与发布（46 个 spec）**：在原有 43 个 spec 基础上增加 `project-management-person-kanban-query`、`project-management-person-kanban` 与 `unified-work-segments-migration`；前者锁定单人时间线的数据范围、停用人员与自查边界，后者覆盖 Desktop 上的默认人员、人员切换、只读详情和规范 URL。`project-management-query-pagination` 与 `project-management-ui-pagination` 继续锁定通知、Task、风险、近期动态的复合游标稳定排序与对象/筛选锚点校验，以及首屏外记录的可达性。
 
-每个 Playwright spec 必须使用 `.spec.ts` 文件名，在首行声明 `// @playwright-project node-db` 或 `// @playwright-project ui`，并在该 spec 内直接从 `@playwright/test` 导入 `test`（允许 import alias）。分类器会先扫描 Playwright 1.61.1 默认的 `**/*.@(spec|test).?(c|m)[jt]s?(x)` 名称；`.test.ts`、`.spec.tsx`、`.test.tsx` 和相应 JS/MJS/CJS/JSX/MTS/CTS 形式都会显式拒绝，不能在项目 `testMatch` 生成前被静默遗漏。共享 AST 分类器只静态追踪官方本地 binding：每次引用都必须是已批准 direct `test...()` API 的 root，test/suite/hook 注册 callback 必须 inline；本地/容器/factory alias、computed/间接 test API 和 `test.extend` 都会 fail closed。Playwright 1.61.1 的 `test.describe.fixme`、`test.describe.serial.only`、`test.describe.parallel.only` 及 `test.expect` 的 `soft`/`poll`/`configure`/`extend`/asymmetric matcher 入口均受支持；`test.info()`、configured/extended Expect 和 matcher 返回值可正常读取或调用。`test.skip`/`fixme`/`fail`/`slow` conditional callback 必须 inline，其中的 fixture 会参与分类；fixture key 使用 AST 解码后的标识符或字符串值，Unicode escape 不能隐藏 `page`/`browser`/`context`，computed key 会 fail closed。模块或 suite 注册阶段只允许官方 test API、未被局部绑定遮蔽且参数中不含可调用本地绑定的 Node 内建调用及少量确定性全局调用；能接收 callback 的 safe-global path、Promise 或未解析构造器、本地注册 helper、非 Node 导入、namespace 解构、callback 型 factory，以及 getter/解构/对象展开/custom iterator 等隐式注册期执行一律拒绝。它不虚称能跨模块追踪 custom fixture，只在无法证明绑定安全时 fail closed；Stage 3A 再统一 UI fixture。因此无需在配置或文档维护第二份文件 topology 清单。分类器还会拒绝声明缺失/重复、node-db 文件使用浏览器 fixture、或 UI 文件完全不使用 `page`/`browser`/`context`。`node-db` project 收集 47 个非浏览器 DB/API/领域 spec 一次；31 个真正 UI spec 继续由 `desktop`（Desktop Chrome，`1440x1000`）与 `mobile`（Pixel 5）各收集一次。默认 reporter 始终拒绝实际收集中的跨项目或未分类文件，并在校验失败时先把整套已收集测试标记为 skipped、阻止测试体副作用，再由 `onEnd` 返回失败；默认、`--list`、纯 `--project` 以及 timeout/headed/retry/trace/output/quiet 等不缩小收集集的参数属于全集选择，会逐文件验证与所选 project 相交的全部 spec 完整出现。`--project` 的 exact、大小写不敏感和 `*` wildcard 行为由 runner/reporter 共用 helper，并以真实 Playwright CLI 回归锁定 `Desktop`、`d*`、`*`、split/equal 形式及错误状态。只有文件/行号、grep、grep-invert、shard、last-failed、only-changed、test-list/test-list-invert 属于局部选择，只放宽未选择文件和每个文件的完整 project 集合要求；未知长参数直接拒绝，不能借 partial 绕过全集校验。`.node.ts` 只由 `test:node` 收集。
+每个 Playwright spec 必须使用 `.spec.ts` 文件名，在首行声明 `// @playwright-project node-db` 或 `// @playwright-project ui`，并在该 spec 内直接从 `@playwright/test` 导入 `test`（允许 import alias）。分类器会先扫描 Playwright 1.61.1 默认的 `**/*.@(spec|test).?(c|m)[jt]s?(x)` 名称；`.test.ts`、`.spec.tsx`、`.test.tsx` 和相应 JS/MJS/CJS/JSX/MTS/CTS 形式都会显式拒绝，不能在项目 `testMatch` 生成前被静默遗漏。共享 AST 分类器只静态追踪官方本地 binding：每次引用都必须是已批准 direct `test...()` API 的 root，test/suite/hook 注册 callback 必须 inline；本地/容器/factory alias、computed/间接 test API 和 `test.extend` 都会 fail closed。Playwright 1.61.1 的 `test.describe.fixme`、`test.describe.serial.only`、`test.describe.parallel.only` 及 `test.expect` 的 `soft`/`poll`/`configure`/`extend`/asymmetric matcher 入口均受支持；`test.info()`、configured/extended Expect 和 matcher 返回值可正常读取或调用。`test.skip`/`fixme`/`fail`/`slow` conditional callback 必须 inline，其中的 fixture 会参与分类；fixture key 使用 AST 解码后的标识符或字符串值，Unicode escape 不能隐藏 `page`/`browser`/`context`，computed key 会 fail closed。模块或 suite 注册阶段只允许官方 test API、未被局部绑定遮蔽且参数中不含可调用本地绑定的 Node 内建调用及少量确定性全局调用；能接收 callback 的 safe-global path、Promise 或未解析构造器、本地注册 helper、非 Node 导入、namespace 解构、callback 型 factory，以及 getter/解构/对象展开/custom iterator 等隐式注册期执行一律拒绝。它不虚称能跨模块追踪 custom fixture，只在无法证明绑定安全时 fail closed；Stage 3A 再统一 UI fixture。因此无需在配置或文档维护第二份文件 topology 清单。分类器还会拒绝声明缺失/重复、node-db 文件使用浏览器 fixture、或 UI 文件完全不使用 `page`/`browser`/`context`。`node-db` project 将非浏览器 DB/API/领域 spec 收集一次；UI spec 由 `desktop`（Desktop Chrome，`1440x1000`）收集一次。默认 reporter 始终拒绝实际收集中的跨项目或未分类文件，并在校验失败时先把整套已收集测试标记为 skipped、阻止测试体副作用，再由 `onEnd` 返回失败；默认、`--list`、纯 `--project` 以及 timeout/headed/retry/trace/output/quiet 等不缩小收集集的参数属于全集选择，会逐文件验证与所选 project 相交的全部 spec 完整出现。`--project` 的 exact、大小写不敏感和 `*` wildcard 行为由 runner/reporter 共用 helper，并以真实 Playwright CLI 回归锁定 `Desktop`、`d*`、`*`、split/equal 形式及错误状态。只有文件/行号、grep、grep-invert、shard、last-failed、only-changed、test-list/test-list-invert 属于局部选择，只放宽未选择文件和每个文件的完整 project 集合要求；未知长参数直接拒绝，不能借 partial 绕过全集校验。`.node.ts` 只由 `test:node` 收集。
 
-Playwright 数据库 harness 另有两个独立验证入口：`npm run test:playwright-db-lifecycle` 负责不连接数据库的 runner 生命周期回归，`npm run test:playwright-db-safety` 负责真实随机 PostgreSQL target/shadow 的安全演练；二者不属于上述 Playwright spec，也不会由 `test:node` 重复执行。2026-09-07 使用官方 runner 执行全量收集的基线为 695 个 project-test：node-db 283、desktop 206、mobile 206，共 78 个文件。该数字只证明测试收集成功，不代表 695 个用例已经执行通过。
+Playwright 数据库 harness 另有两个独立验证入口：`npm run test:playwright-db-lifecycle` 负责不连接数据库的 runner 生命周期回归，`npm run test:playwright-db-safety` 负责真实随机 PostgreSQL target/shadow 的安全演练；二者不属于上述 Playwright spec，也不会由 `test:node` 重复执行。执行拓扑调整后以官方 runner 的实际收集和执行结果为准，不沿用旧 project-test 数量。测试收集成功不代表用例已经执行通过。
 
 用以下命令复核文件层基线和 Playwright 实际收集结果；Playwright 列表仍必须走官方 runner 和随机隔离数据库，不能直接调用 `playwright test` 绕过安全门禁：
 
@@ -52,7 +60,11 @@ npm run test:e2e -- --list
 
 项目/任务通知追加超级管理员的数据库回归使用 `npm run test:e2e -- tests/project-management-super-administrator-notifications.spec.ts tests/project-management-project-updates.spec.ts`。官方 runner 使用随机隔离数据库并禁用真实投递；用例覆盖现行事件矩阵、账号去重、角色有效性、普通飞书偏好与强制事件、缺少飞书身份、账号安全排除，以及真实项目更新入口。该变更不新增浏览器交互，核心收件人规则由 node-db 集成用例验证；通知变更完成时仍需完整 E2E 门禁。
 
+Task 手动催促回归使用 `npm run test:e2e -- tests/task-urge.spec.ts`，仅通过官方隔离数据库与受控服务执行。覆盖无编辑权限用户、桌面与窄屏表单、有效收件人及强制飞书偏好、纯文本卡片、共享冷却和并发幂等、待审批任务、非法状态，以及 outbox 受控失败后的事务回滚；测试不发送真实飞书消息。通知变更的完成门禁仍为 `npm run check` 和完整 `npm run test:e2e`。
+
 ### 自动化门禁分层
+
+会议列表筛选定向回归使用 `npm run test:e2e -- tests/meeting-filters.spec.ts tests/meeting-filters-ui.spec.ts`，仅通过官方随机隔离数据库、受控服务和禁发保护运行。覆盖组合条件、停用参会人员、北京时间区间交集、最近 7/30/90 天、直接关联与未关联、创建人身份、稳定排序分页、URL 保留与重置、非法参数、加载状态及 Desktop `1440x1000`/窄窗口。同一变更的完成门禁仍需 `npm run check` 和完整 `npm run test:e2e`；筛选输入纯校验纳入受控 Node 套件。
 
 验证政策以根目录 `AGENTS.md` 为准。本节区分日常任务完成与合并/发布验收，不要求每次局部迭代都重跑完整回归：
 
@@ -60,12 +72,12 @@ npm run test:e2e -- --list
 | --- | --- |
 | 纯文档或注释，无可执行行为变化 | 本次差异的 `git diff --check`、受影响链接/路径/命令及规则一致性核对；不默认启动应用测试 |
 | 局部、非高风险代码或测试 | `npm run check` 和受影响测试 |
-| 新增或修改 UI 行为 | 代码门槛加相关 UI spec，在 Desktop `1440x1000` 与 Pixel 5 都验证适用的正常、异常和极端状态 |
+| 新增或修改 UI 行为 | 代码门槛加相关 UI spec，在 Desktop `1440x1000` 都验证适用的正常、异常和极端状态 |
 | 权限、状态流转、数据库、通知、上传、共享基础设施或跨模块行为 | `npm run check` 和完整 `npm run test:e2e`，保留相关并发、持久化及副作用断言 |
 
 类别叠加时取更严格要求；影响范围无法确认时升级验证。合并/发布验收仍要求 `npm run check`、完整 E2E 和适用的构建、迁移及专项检查，不能把局部通过或文档任务完成表述为全功能/可发布通过。安全规则、验证门槛和审查政策即使只修改文档也需要独立审查，但无可执行变更时不因此触发应用测试。
 
-开发中可通过 `npm run test:e2e -- <相关 spec 路径>` 定向执行，UI 保留 `desktop` 和 `mobile` 两个 project；Node 测试使用 `npm run test:node` 的受控入口。新增浏览器功能仍须覆盖主要工作流，bug 修复在可行时补充修复前失败、修复后通过的回归；浏览器不适用时使用可靠的 Node 或集成测试并说明原因。权限变更覆盖允许/拒绝，状态流转核对适用的 UI 和持久化结果，通知测试只核对 outbox/guard，不联系真实收件人。
+开发中可通过 `npm run test:e2e -- <相关 spec 路径>` 定向执行，UI 保留 `desktop` project；Node 测试使用 `npm run test:node` 的受控入口。新增浏览器功能仍须覆盖主要工作流，bug 修复在可行时补充修复前失败、修复后通过的回归；浏览器不适用时使用可靠的 Node 或集成测试并说明原因。权限变更覆盖允许/拒绝，状态流转核对适用的 UI 和持久化结果，通知测试只核对 outbox/guard，不联系真实收件人。
 
 先跑定向测试，变更稳定后执行一次适用的完成门禁。只有相关源码、测试、依赖、配置和环境未变化时才复用已有成功结果；修复后重跑受影响检查。不并发执行争用同一端口、数据库或共享 fixture 的测试，不绕过官方 runner、隔离库、禁发或出站保护，包括仅收集测试时。
 
@@ -77,7 +89,7 @@ npm run test:e2e:full
 npm run test:e2e:nightly
 ```
 
-- `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，当前收集 56 个 project-test：1 个匿名/保护路由 suite、采购与项目管理导航、短标题窄屏截断、通知视图与长内容、单人只读看板、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 与 Pixel 5 对称执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
+- `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，覆盖：1 个匿名/保护路由 suite、采购与项目管理导航、短标题窄屏截断、通知视图与长内容、单人只读看板、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
 - `test:e2e:full` 与兼容入口 `test:e2e` 都执行完整 84 个 spec，并保留 reporter 对全文件、全 project 收集完整性的严格校验。PR 合并前以及共享测试基础设施变更后使用这一层。
 - `test:e2e:nightly` 执行同一完整集合，并设置 `PM_RUN_SCALE_TESTS=true` 打开既有 10k/100k 规模用例。聚合门禁 `npm run test:nightly` 还会依次执行 `check`、runner lifecycle、真实 PostgreSQL safety、nightly E2E 和 `build`；仓库不包含 CI 调度文件，定时触发由外部流水线配置。
 
@@ -86,6 +98,8 @@ npm run test:e2e:nightly
 仍使用 `serial` 的 8 个 suite 都依赖进程级或跨用例共享状态，不能在未隔离这些依赖前机械并行：`business-flows` 与 `functional-panels` 复用 `beforeAll` 创建的业务主体和连续状态；`feishu-message` 复用全局网络 mock；`notification-outbox-adapters` 复用 adapter/时钟 mock 与 outbox 清理；`feishu-user-sync`、`account-management`、`inactive-person-procurement-safety` 验证并发锁、停用和权限状态；`procurement-upload-atomicity` 验证共享文件存储及补偿清理。后续解除 `serial` 时，必须先把对应全局 mock、数据库状态或文件目录改为逐用例隔离。
 
 ## 测试前准备
+
+会议纪要导出定向回归：`npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，通过官方隔离数据库和受控服务运行，不连接真实飞书。覆盖指定进行中任务去重、项目/任务独立链接、参会人完整区间投入及边界、删除对象过滤、身份拒绝、上限拒绝、普通查看者复制、最新内容、剪贴板拒绝/不可用后的手动回退、请求失败与加载状态；UI 在现有 desktop project 内检查 `1440x1000` 和 Pixel 5 尺寸 `393x851`。模板纯格式化回归纳入 `tests/meeting-records.node.ts`，由 `npm run test:node` 运行。任务完成仍需代码门禁及完整 E2E，不以定向结果代替全量验收。
 
 ### 环境
 
@@ -202,6 +216,23 @@ await page.screenshot({ path: ".tmp/home.png", fullPage: true });
 await browser.close();
 ```
 
+## 独立会议验证
+
+- 展示配置回归覆盖 ID 规范化及上限、幂等创建、实时项目展开、直接任务移动后保留、其他工作人员只读投入、计划空记录、删除兼容和配置清除；UI 在两个设备项目覆盖选择、预览计划及编辑移除。迁移用例验证已有纪要和版本保留且配置默认为空。
+- 会议横轴回归检查工作台公共组件、默认周尺度、周／月／季／年可见刻度、区间外节点、长区间滑块及双击投入详情；超管查看自身投入也只读，跨年最早／最新定位不改变表单 URL 或未保存纪要。另覆盖加载失败重试、原任务刷新和软删除过滤。范围公共函数纳入 Node 回归，抽取逻辑同时运行既有 `project-management-canvas-adaptive-loading.spec.ts`，确认工作台及其他动态画布范围行为不变。
+
+通过官方隔离 runner 执行：
+
+```bash
+npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts tests/meeting-records-migration.spec.ts
+```
+
+- `meeting-records.node.ts` 纳入受控 Node 套件，验证仅全局超管可写、字段／时间范围及输入边界。
+- `meeting-records.spec.ts` 验证项目管理员与普通用户拒绝写、角色撤销、停用人员保留、幂等创建、并发版本冲突、事务审计、无通知、列表游标和跨项目时间线全员一致；包含半开区间、空人员行、软删除过滤、实时更新、伪造人员范围及 5000 条容量边界。
+- `meeting-records-ui.spec.ts` 在 Desktop 1440×1000 验证匿名访问、创建／预览／编辑、非参与人查看、真实 Server Action 重放拒绝、只读工作详情、长主题／纪要、50 位参与人、空工作记录及刷新，另验证完整工作范围内第 31 天以后的记录可通过现有滑块访问且不再出现查看区间控件，检查页面健康和横向溢出。
+- `meeting-records-migration.spec.ts` 只在官方 runner 环境创建随机专属 PostgreSQL 及 shadow 库，验证前置迁移链升级、旧会议表哨兵数据保留、重复部署、数据库约束，以及真实结构和完整迁移链的 schema drift；结束后只清理本用例创建的资源。普通开发库里的旧实验迁移差异不由测试自动修复。
+- 此功能涉及权限、数据库和路由，交付还需 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`；定向结果不能替代完整门禁，测试不得向真实飞书发送消息。
+
 ## 基础代码测试
 
 Node 测试定向开发时可单独执行：
@@ -259,7 +290,7 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 - 主要按钮可通过可见文本或稳定 `data-testid` 定位。
 - 提交失败时页面显示中文可读错误，不直接暴露 Zod JSON 或堆栈。
 
-所有新增或修改的表单验证场景还必须在配置的 Desktop `1440x1000` 与 Pixel 5 项目中检查：
+所有新增或修改的表单验证场景还必须在配置的 Desktop `1440x1000` 项目中检查：
 
 - 初始控件没有 `aria-invalid="true"`，也不提前显示字段错误。
 - 空值提交后首个错误控件获得焦点，错误控件出现 destructive 边框/ring，并用 `aria-describedby` 关联可见中文 `role="alert"`。
@@ -285,8 +316,8 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 
 ## 采购模块测试
 
-1. `tests/procurement-shell.spec.ts` 在 Desktop 与 Pixel 5 验证 `/procurement` 重定向到看板、四项侧栏/抽屉导航、折叠与关闭焦点、导航后抽屉关闭、订单详情归属“订单列表”；四个导航面板和确定性草稿订单的详情、编辑页还会断言顶部为“采购管理”上下文命令栏、标题正确、不存在返回链接，并检查无横向溢出和浏览器异常；详情页另验证状态与可用操作位于命令栏。该用例验证导航中不存在“工坊加工费”，`tests/functional-panels.spec.ts` 另验证旧 `/procurement/workshop-fee` 返回 404。`tests/inactive-person-procurement-safety.spec.ts` 验证停用账号的侧栏/抽屉隐藏“新建申请”、直达写入路由被重定向或返回 404、历史草稿可读且无继续编辑、提交、上传、确认或催办入口。
-   `tests/functional-panels.spec.ts` 还会在两个项目中创建 `isWorkshopFee=true` 的已完成历史订单，验证普通用户仍能从列表展开明细并进入详情，看到工坊徽标、加工费种类和加工商；页面只读访问前后订单及明细记录必须完全不变。
+1. `tests/procurement-shell.spec.ts` 在 Desktop 验证 `/procurement` 重定向到看板、四项侧栏导航、折叠与展开焦点、订单详情归属“订单列表”；四个导航面板和确定性草稿订单的详情、编辑页还会断言顶部为“采购管理”上下文命令栏、标题正确、不存在返回链接，并检查无横向溢出和浏览器异常；详情页另验证状态与可用操作位于命令栏。该用例验证导航中不存在“工坊加工费”，`tests/functional-panels.spec.ts` 另验证旧 `/procurement/workshop-fee` 返回 404。`tests/inactive-person-procurement-safety.spec.ts` 验证停用账号的侧栏隐藏“新建申请”、直达写入路由被重定向或返回 404、历史草稿可读且无继续编辑、提交、上传、确认或催办入口。
+   `tests/functional-panels.spec.ts` 还会创建 `isWorkshopFee=true` 的已完成历史订单，验证普通用户仍能从列表展开明细并进入详情，看到工坊徽标、加工费种类和加工商；页面只读访问前后订单及明细记录必须完全不变。
 2. `tests/procurement-pending-orders.spec.ts` 验证 `/procurement/pending` 的当前处理人过滤、待办和最近订单；`tests/procurement-budget-pool-dashboard.spec.ts` 验证新 Excel 无技术方向列、同兵种组聚合历史预算行、看板一组一栏及项目说明。
 
 ### 新建申请与草稿
@@ -326,9 +357,9 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 
 ### 第一阶段导航与通知视图回归
 
-使用官方 runner 执行 `npm run test:e2e -- tests/project-management-s3-shell.spec.ts tests/procurement-shell.spec.ts`，同时保留 Desktop `1440x1000` 与 Pixel 5 项目。测试必须使用 runner 的随机隔离数据库、受控端口和通知禁发保护，不能连接正常开发或生产数据库。
+使用官方 runner 执行 `npm run test:e2e -- tests/project-management-s3-shell.spec.ts tests/procurement-shell.spec.ts`，同时保留 Desktop `1440x1000` 项目。测试必须使用 runner 的随机隔离数据库、受控端口和通知禁发保护，不能连接正常开发或生产数据库。
 
-- 项目导航按工作空间、团队排期、消息中心分组，入口顺序、中文可访问名称、当前页面标记和通知未读数正确；折叠导航、移动抽屉、Escape 关闭和焦点返回可用。
+- 项目导航按工作空间、团队排期、消息中心分组，入口顺序、中文可访问名称、当前页面标记和通知未读数正确；折叠与展开导航可用，并保留键盘焦点。
 - 页面标题按实际渲染高度判断两行截断，而非字符数；覆盖不足 60 字但窄屏仍溢出的标题、展开收起后的高度和焦点、调整宽度后展开入口的变化。任务详情面包屑仍能回到任务列表。移动补充 `320x568` 短屏，末尾导航可滚动到达，超长通知标题和无空格摘要不产生页面级横向溢出。
 - 通知默认列表不包含偏好表单；`?view=settings` 独立展示偏好。切换视图保留分类、未读条件和分页上下文，刷新与浏览器返回可恢复；保存成功核对数据库，网络失败恢复原值并可重试，停用人员所有偏好开关禁用。
 - Shell fixture 自行创建具备 default-tenant 飞书身份的可用审批管理员，再创建任务，不依赖其他 spec 提前准备管理员，也不弱化数据库约束。
@@ -338,18 +369,18 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 
 ### 既有业务场景
 
-桌面结构回归新增 `tests/project-management-ui-desktop-details.spec.ts`：验证极长标题仍只有一个主标题、当前节点位于首屏且占据主要宽度、默认不挂画布、评论发布刷新后的分区、前后退、未提交证据/评论/投入草稿保留、视口中心稳定和风险深链；资源默认隐藏无效选择器，取消全量模式后可按范围筛选。路由回归还验证从 `focus` 深链进入后切换分区消费旧定位，后续节点导航不被旧重定向覆盖；画布锚点键盘选择保持画布内选择语义。月尺度“今天”居中误差按半个显示像素校验，不改变投入的业务时间精度。桌面位置检查使用 1440×1000；本轮以桌面体验为主，既有 Pixel 5 用例继续作为兼容性回归，不据此宣称手机体验专项完成。
+桌面结构回归新增 `tests/project-management-ui-desktop-details.spec.ts`：验证极长标题仍只有一个主标题、当前节点位于首屏且占据主要宽度、默认不挂画布、评论发布刷新后的分区、前后退、未提交证据/评论/投入草稿保留、视口中心稳定和风险深链；资源默认隐藏无效选择器，取消全量模式后可按范围筛选。路由回归还验证从 `focus` 深链进入后切换分区消费旧定位，后续节点导航不被旧重定向覆盖；画布锚点键盘选择保持画布内选择语义。月尺度“今天”居中误差按半个显示像素校验，不改变投入的业务时间精度。桌面位置检查使用 1440×1000；所有窗口使用同一套界面，窄窗口验证内容可滚动访问且无功能隐藏。
 
 第二阶段新增 `tests/project-management-ui-management-overview.spec.ts` 和 `tests/project-management-ui-list-foundation.spec.ts`，通过官方 runner 覆盖工作台分视图、独立概览不渲染画布、风险全量计数及分页/失效恢复、已删除排除、终态遗留风险、停用只读与匿名拒绝，以及项目/任务列表长内容、统一筛选、终态、刷新与前进后退。连同原分页、Shell、资源与权限场景共同回归，不使用真实通知或业务数据库。
 
-1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，页面标题为“工作台”，默认不挂载时间画布，显示最多 8 条行动待办（默认前 4 条）、参与任务预览和折叠通知；切换 `?view=schedule` 查看完整个人时间画布与计划；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
-2. 桌面与 Pixel 5 打开 `/progress/kanban`，默认人员应为当前用户；普通非成员可通过异步选择器切换任一在职人员，URL 使用唯一 `people` 并在切换时保留 `center`、`scale`。画布只能返回所选 Person 行、其完整投入和有效参与的 ACTIVE Task Current Plan；详情可读且不得出现新增、编辑、确认、取消或删除操作。投入本人、Task Owner 和管理员也必须只读，键盘与拖动交互不得改变投入、变更记录、审计或通知 outbox。覆盖候选加载后停用时选择器与画布均回退本人、无效人员回退、空时间线、超长姓名、浏览器前进/后退、未登录拒绝和无横向溢出。
+1. 桌面 `1440x1000`打开 `/progress`，页面标题为“工作台”，默认按指标、完整时间画布、待办与参与任务双栏、折叠通知的顺序展示，窄屏纵向排列；直接显示最多 8 条行动待办及其上下文，不再折叠为前 4 条，参与任务表不得截断为六项，须展示版本及当前节点颜色警示，筛选与时间线同步并保留视口；不得出现“我的工作／个人日程／管理概览”切换导航；旧 `view=schedule`、`view=management` 链接规范化到同一工作台，保留合法筛选、视口与定位参数；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
+2. 统一界面 打开 `/progress/kanban`，默认人员应为当前用户；普通非成员可通过异步选择器切换任一在职人员，URL 使用唯一 `people` 并在切换时保留 `center`、`scale`。画布只能返回所选 Person 行、其完整投入和有效参与的 ACTIVE Task Current Plan；详情可读且不得出现新增、编辑、确认、取消或删除操作。投入本人、Task Owner 和管理员也必须只读，键盘与拖动交互不得改变投入、变更记录、审计或通知 outbox。覆盖候选加载后停用时选择器与画布均回退本人、无效人员回退、空时间线、超长姓名、浏览器前进/后退、未登录拒绝和无横向溢出。
 3. 打开 `/progress/tasks`，默认范围为“我参与”、状态为“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
 4. 打开 `/progress/tasks/[id]`，默认同页显示紧凑资料、完整时间画布和节点导航，只有一个 h1；下方桌面三栏为风险讨论、节点执行与风险录入、近期动态，窄屏按主体操作、风险讨论、近期动态纵向排列。点击节点直接更新同页详情与审批入口；审批门禁和全局反馈在时间线上方持续可见。旧 `section` 参数不再隐藏内容，`focus`、`center`、缩放参数与风险/节点详情锚点仍可定位；同页交互保留尚未提交的表单。Current Plan 左侧 Task 标题必须是指向该 Task 详情的链接，人员行以及 Revision 候选/历史行不得被误链接；存在未保存的投入创建内容时，点击标题必须先确认，取消后保留表单。全部有效成员及其全部投入继续展示；有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。`PENDING_APPROVAL` Revision 存在时，修改后的候选 Plan 应自动以只读琥珀色行紧跟 Current Plan 展示，提交人、审批人和普通旁观者均按既有 `task.view` 规则查看，但只有 `revision.review` 审批人显示批准/驳回；批准后候选成为 Current，驳回/取消后候选消失。候选缺失、基线/锁版本不匹配、跨 Task 或结构异常时不得下发候选正文，时间线和审批卡显示中文警告，“批准”禁用而“驳回”及有权限的“取消”仍可用。每个已生效 Revision 节点应有独立的“显示修订前计划”复选框；默认不加载，首次勾选显示 loading，失败可重试，成功后在候选 Plan（如有）与人员投入之间插入对应基础 Plan 的只读历史行。多选按 Revision 时间倒序，取消只隐藏目标行，再次勾选复用页面缓存；跨 Task、未生效或已不在 Current Plan 的 Revision 查询必须返回脱敏错误。对比节点超出初始三年窗口时，“最早内容 / 最新内容”应能在本地切换 presentation 窗口并看到目标节点，同时保持 Task URL、数据块请求范围和未保存投入不变；远期窗口缩放也不得持久化对比中心，点击 Current Plan 节点、浏览器前进后退或取消对应历史行后必须恢复权威窗口。投入悬浮提示必须显示关联 Task，未关联时显示“独立投入”，Busy 不得显示 Task。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息和成员，并保持原有并发保护。
-5. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；Pixel 5 不提供直接拖动，但必须可通过表单改人员、时间、内容和预期产出后创建。既有投入总览只读；双击或 Enter 打开宽版详情，基本信息必须明确展示类型、状态、所属人员与关联 Task（关联 Task 可直达详情），完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。资源选择和视口状态由 URL 保存，时间范围由已选内容自动派生。
-6. 桌面和 Pixel 5 新增过去/未来的独立及任务关联投入，只填写人员、时间、内容及可选任务；修改并刷新核对持久化，软删除后不显示。不得出现类型、状态、优先级、输出、确认/部分确认、合并或批量操作。重叠投入正常展示，不产生投入待办或通知。
+5. Desktop 打开 `/progress/resources`：渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；同时验证通过表单修改人员、时间和内容后创建。既有投入总览只读；双击或 Enter 打开宽版详情，基本信息必须明确展示类型、状态、所属人员与关联 Task（关联 Task 可直达详情），完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。资源选择和视口状态由 URL 保存，时间范围由已选内容自动派生。
+6. 统一界面 新增过去/未来的独立及任务关联投入，只填写人员、时间、内容及可选任务；修改并刷新核对持久化，软删除后不显示。不得出现类型、状态、优先级、输出、确认/部分确认、合并或批量操作。重叠投入正常展示，不产生投入待办或通知。
 7. `/progress` 默认显示进行中的参与任务，切换全部后草稿/终态 Task 表和计划轨道同步。行动待办只统计当前任务节点与审批，不包含投入确认；逾期当前节点仍计入 criticalCount。普通投入到期后保持原值，不产生新待办或通知。
-8. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
+8. 在 Desktop `1440x1000` 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
 9. `/progress/task/:id`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、超过 25 个 Task 和 50 个人员仍一次完整装配、只读 Plan 与可交互 Person 混排、焦点固定、空选择、软删除投入和旧归档不返回也不渲染，以及内容两侧两个上海日历月和 180 天自适应块。旧 `taskCursor`/`personCursor` 必须被忽略并从规范 URL 移除。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
 10. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 11. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
@@ -361,16 +392,16 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 1. `tests/project-management-s8.spec.ts` 验证 Action Inbox 不返回 `TERMINATION`/“任务结束申请”，而是为在职有效 OWNER/PARTICIPANT 返回 ACTIVE Task 的 Current Plan 当前节点。Milestone 必须匹配 `activeMilestoneNodeId`；进入结束阶段后返回 ACTIVE Terminal。DRAFT、终态、已删除 Task、已移除成员、旁观者、管理员非成员、候选/历史 Plan 和停用 actor 均不得获得当前节点。
 2. 相同 Milestone 存在未撤出的 `PENDING` Review、相同 Terminal 存在 `PENDING` Termination Review 时，成员当前节点必须隐藏；全局管理员只看到对应审批项。待处理 Revision 不隐藏当前节点。逾期当前节点为 `CRITICAL` 并计入 `criticalCount`，未逾期为 `MEDIUM`。
 3. 混合数据流使用小页循环加载，断言全局顺序、无重复、无缺口且 `generatedAt` 跨页保持不变；格式错误、字段注入、校验被破坏和跨 actor 游标均返回中文 `VALIDATION_ERROR` 与安全字段错误。只有带非空 `fieldErrors.cursor` 的 `VALIDATION_ERROR` 才表示游标失效；其他校验错误不得误导用户重新加载队列。游标锚点离开当前队列后应拒绝；客户端保留已加载内容，但不再重放失效游标，而是通过“重新加载队列”无游标获取并整体替换为新的权威首屏。普通网络失败仍保留原游标供重试。
-4. `tests/project-management-ui-routes-responsive.spec.ts` 在 Desktop `1440x1000` 与 Pixel 5 验证完整行包含类型、严重度、标题、摘要、Project/Task、Node 类型/状态、相关时间和明确操作按钮；空列表、超长内容和无页面级横向溢出均受覆盖。创建 55 条待办时首屏只展示 50 条；已加载的非锚点退出队列时，游标仍有效且 APPEND 必须保持首屏统计与 `generatedAt` 快照，只追加 items 和更新 `nextCursor`。已消费锚点退出队列后，加载更多必须显示结构化中文错误并保留 50 条旧内容，“重新加载队列”恢复为无该锚点的新首屏，随后网络失败仍可用原游标重试并无重复、无缺口地加载全部剩余项；返回 `/progress` 只预览 8 条。
+4. `tests/project-management-ui-routes-responsive.spec.ts` 在 Desktop `1440x1000` 验证完整行包含类型、严重度、标题、摘要、Project/Task、Node 类型/状态、相关时间和明确操作按钮；空列表、超长内容和无页面级横向溢出均受覆盖。创建 55 条待办时首屏只展示 50 条；已加载的非锚点退出队列时，游标仍有效且 APPEND 必须保持首屏统计与 `generatedAt` 快照，只追加 items 和更新 `nextCursor`。已消费锚点退出队列后，加载更多必须显示结构化中文错误并保留 50 条旧内容，“重新加载队列”恢复为无该锚点的新首屏，随后网络失败仍可用原游标重试并无重复、无缺口地加载全部剩余项；返回 `/progress` 只预览 8 条。
 
 ### Project 立项专项测试
 
-1. `/progress/projects` 无参数时默认“只看我参与 + 进行中”，显式 `mine=0&status=` 可取消默认；Desktop 和 Pixel 5 均无横向滚动。
+1. `/progress/projects` 无参数时默认“只看我参与 + 进行中”，显式 `mine=0&status=` 可取消默认；Desktop无横向滚动。
 2. 普通账号可提交完整立项但不能审批；两类全局管理员可通过或驳回。驳回保留同一 Project，原申请人可修改并创建新轮次。
 3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
 4. 空 Project 可以直接结束；未删除的 `DRAFT` 或 `ACTIVE` Task 会阻止结束，仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 时允许结束。阻塞请求必须零写入，详情阻塞数必须精确且明细最多 10 条；Task 完成进度必须显示 `COMPLETED /（未删除总数 - CANCELLED）`，同时保留原始总数供空 Project 与结束门禁使用。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
 5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
-6. Desktop `1440x1000` 与 Pixel 5 打开 `/progress/projects/[id]`：概览显示头像、唯一主标题、状态、负责人和 Task 完成进度；展开补充资料查看完整内容与成员，权限操作保留；不得显示立项历史或 raw 审计卡片。`PENDING_APPROVAL` 时，`#establishment` 审批区还必须只展示当前轮次、提交人、提交时间和申请 Task 的名称/中文状态，零 Task 时显示明确空状态；管理员可见审批控件，申请人只读。工作台顶部同页提供完整时间线，默认只包含本 Project `ACTIVE` Task 的 Current Plan，同时展示 Project/Task 全部有效成员在其他 Task 和独立投入中的完整时间；每条已显示计划轨道的左侧 Task 标题必须链接到对应 Task 详情。时间线下方桌面三栏分别展示 Project 自身及所属 Task 风险与 Project 评论、全量分组任务及风险录入、中文近期动态；窄屏先展示任务主体再展示协作和动态，不再切换详情分区。旧 `section` 链接仍显示完整页面。Task 按七种精确状态进入独立分组，只渲染非空分组；进行中默认展开且全选，其余默认折叠且不选。逐条选择、组级全选/全不选/部分选择和“已展示 X/Y”均须同步计划轨道；折叠或展开不得改变选择，计划筛选不得移除人员行或 Segment。已完成节点使用绿色勾选，未完成节点保留普通圆点。定位按钮仍选择当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start；范围外目标通过规范 `focus` / `center` 回载后，应额外显示并展开目标状态组、滚动到时间线并聚焦目标。节点超限时分组仍可展开查看 Task，但显示控件禁用。两种视口都要验证无横向溢出、长 Task 名称、完整人员投入和投入悬浮 Task 信息。Task 与 Project 工作台须保留当前节点红色已逾期、琥珀色 72 小时内即将到期、绿色超过 72 小时提示；`tests/current-node-deadline-ui.spec.ts` 验证同页列表/节点详情与时间线颜色一致，边界用固定时钟，自动更新用可推进时钟；终态及无有效日期不产生警示。
+6. Desktop `1440x1000` 打开 `/progress/projects/[id]`：概览显示头像、唯一主标题、状态、负责人和 Task 完成进度；展开补充资料查看完整内容与成员，权限操作保留；不得显示立项历史或 raw 审计卡片。`PENDING_APPROVAL` 时，`#establishment` 审批区还必须只展示当前轮次、提交人、提交时间和申请 Task 的名称/中文状态，零 Task 时显示明确空状态；管理员可见审批控件，申请人只读。工作台顶部同页提供完整时间线，默认只包含本 Project `ACTIVE` Task 的 Current Plan，同时展示 Project/Task 全部有效成员在其他 Task 和独立投入中的完整时间；每条已显示计划轨道的左侧 Task 标题必须链接到对应 Task 详情。时间线下方桌面三栏分别展示 Project 自身及所属 Task 风险与 Project 评论、全量分组任务及风险录入、中文近期动态；窄屏先展示任务主体再展示协作和动态，不再切换详情分区。旧 `section` 链接仍显示完整页面。Task 按七种精确状态进入独立分组，只渲染非空分组；进行中默认展开且全选，其余默认折叠且不选。逐条选择、组级全选/全不选/部分选择和“已展示 X/Y”均须同步计划轨道；折叠或展开不得改变选择，计划筛选不得移除人员行或 Segment。已完成节点使用绿色勾选，未完成节点保留普通圆点。定位按钮仍选择当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start；范围外目标通过规范 `focus` / `center` 回载后，应额外显示并展开目标状态组、滚动到时间线并聚焦目标。节点超限时分组仍可展开查看 Task，但显示控件禁用。统一界面仍要验证无横向溢出、长 Task 名称、完整人员投入和投入悬浮 Task 信息。Task 与 Project 工作台须保留当前节点红色已逾期、琥珀色 72 小时内即将到期、绿色超过 72 小时提示；`tests/current-node-deadline-ui.spec.ts` 验证同页列表/节点详情与时间线颜色一致，边界用固定时钟，自动更新用可推进时钟；终态及无有效日期不产生警示。
 
 ### 风险、评论和近期动态专项测试
 
@@ -390,7 +421,7 @@ npm run test:node
 
 ### Task 创建页专项测试
 
-自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas 的 Shift/框选/整组拖动和双向批量移动、Pixel 5 不显示批量移动入口、移动端纵向编辑，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
+自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas 的 Shift/框选/整组拖动和双向批量移动，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
 
 1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面按 Task 信息、TimeCanvas、共享节点导航、节点 Inspector 纵向排列，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；负责人和参与人员分别显示头像胶囊及独立搜索框，不再使用统一人员选择器加角色下拉框；不得出现桌面节点表、节点复制、批量选择/删除、独立校验按钮，也不得查询或展示成员投入与 Busy 数据。
 2. 验证旧 `start` 参数被忽略并从规范 URL 移除，`relatedTaskId` 和 `templateTaskId` 仍可预填且不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
@@ -399,32 +430,32 @@ npm run test:node
 5. 验证 Terminal 名称 trim 后空白、200/201 字符边界；自定义名称在创建、Draft 编辑、Revision、模板复制、查询、工作台、版本差异、审计和快照中保持一致。默认 `Terminal` 不改变既有 canonical hash，自定义名称及其变更必须改变 hash。
 6. Revision 创建必须直接进入待审批；分别验证 `revisionAt` 等于 Start、Candidate Terminal、最后完成 Milestone 和上一条有效 Revision 时允许，越界时事务零写入。驳回后修改应直接重新送审且 `reviewRound + 1`，不存在 Draft 或单独 Submit。分别从待审批和已驳回状态取消，验证 `revision_cancelled` 使用通知机器人并直达 Task，创建人、OWNER、操作人和活跃全局管理员按账号去重；所有轮次未完成审批 outbox/recipient 置为 `CANCELED`、旧站内审批已读、已发送记录保留，重复取消 exactly once。还要覆盖 PROCESSING outbox/recipient 与 worker 的 outbox→recipient 并发锁序、收件人解析后状态变化的发送前复核，以及无 round 旧消息不得在第 2 轮误发。
 7. 批准前 Revision 只出现在历史；批准后才进入 Current Plan 时间轴。Revision anchor 不增加阶段带，所有投入新增、更新和重关联入口均拒绝 Revision 节点。
-8. 在画布与共享节点导航选择 Start、Milestone、Terminal；画布高亮、节点导航、Inspector 和所选节点的前置阶段块必须双向同步。从节点导航选择节点时，桌面 TimeCanvas 必须自动横向滚动，将对应时间点带入可视区。桌面另验证 Shift 点击增减和从空白画布拖动框选，矩形只按可编辑锚点中心命中；普通点击收敛为单选，空白点击仍打开快捷创建。多选数量和高亮不得出现在 Pixel 5，也不得写入本地草稿。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段。
+8. 在画布与共享节点导航选择 Start、Milestone、Terminal；画布高亮、节点导航、Inspector 和所选节点的前置阶段块必须双向同步。从节点导航选择节点时，桌面 TimeCanvas 必须自动横向滚动，将对应时间点带入可视区。桌面另验证 Shift 点击增减和从空白画布拖动框选，矩形只按可编辑锚点中心命中；普通点击收敛为单选，空白点击仍打开快捷创建。多选数量和高亮不得写入本地草稿。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段。
 9. 从空白画布快捷菜单新增 Milestone、移动 Terminal；非法时刻的操作保持禁用并显示原因。新增 Milestone 应立即以琥珀虚线临时节点进入画布和共享节点导航，前后两段阶段块同时标记临时；补全必填项后自动转正。
 10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。桌面选中多个可编辑节点后，鼠标拖动任一已选节点必须以同一时间差预览并移动整组，保持组内相对间隔且不改未选节点；一次撤销/重做覆盖整组。碰撞、严格边界或画布边界非法时整组零修改并给出中文提示。单节点拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
-11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。Desktop 多选状态栏显示“批量移动”，Dialog 必须显式选择“当前及后续”或“仅已选节点”，并覆盖正整数天校验、前移/后移、取消和非法结果零修改。“当前及后续”包含当前焦点及时间不早于它的可编辑节点，“仅已选节点”不影响未选节点；只读承接节点不移动，成功操作由一次撤销/重做覆盖整批。Pixel 5 不显示批量移动入口。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
+11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。Desktop 多选状态栏显示“批量移动”，Dialog 必须显式选择“当前及后续”或“仅已选节点”，并覆盖正整数天校验、前移/后移、取消和非法结果零修改。“当前及后续”包含当前焦点及时间不早于它的可编辑节点，“仅已选节点”不影响未选节点；只读承接节点不移动，成功操作由一次撤销/重做覆盖整批。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
 12. Milestone 只能在节点详情中单独删除；临时节点切换后保留并可显式删除，Start/Terminal 永远不可删除。页面不得出现节点复制、勾选或批量删除入口。
 13. 刷新页面后恢复 v4 临时节点、最后合法画布位置与选中节点，并验证 v4 Inspector 工作副本转换为实时临时节点。预置 v1/v2/v3 localStorage 与 IndexedDB 数据后不得出现恢复或导出提示，tombstone 最终删除旧数据；当前 v4 草稿仍完整恢复。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
 14. 创建零 Milestone Task 后执行激活：Task 和 Terminal 均为 `ACTIVE`，`activeMilestoneNodeId=null`；工作台和列表使用 Terminal 名称/日期，审计和激活通知使用 Terminal 名称，不显示“当前没有 Active Milestone”。OWNER/PARTICIPANT 提交结束申请后 Task 仍为 `ACTIVE`，全局管理员批准才在同一事务结束 Task，并写审计和 `project-management` outbox。
 15. Task Composer 与 Task Workbench 的共享节点导航验证节点符号、选中/完成/错误态和上海日期；使用长 Task/Terminal/Milestone/成员名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和节点导航滚动/换行可用。
-16. Pixel 5 上共享节点导航改为纵向；仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
+16. 共享节点导航在所有窗口使用相同组件；仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
 
 ### DRAFT Task 统一编辑专项测试
 
 1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 删除草稿 → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、成员和计划均无保存控件。删除草稿只对 Owner/全局管理员显示，需二次确认并软删除 Task；激活后编辑与删除草稿按钮都消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
 2. DRAFT 激活使用事务内服务端时间复核 Current Plan 的 `plannedStartAt`；开始时间在未来时必须拒绝且 Task、节点、审计、通知和 outbox 零写入，开始时间已到达时保持既有激活流程。已经离开 DRAFT 的历史 Task 不追溯处理。
-3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、关联 Task、全部现有 Owner/Participant（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。最终 schema 不存在 `LEAD/MEMBER/REVIEWER/VIEWER` 运行时成员，旧事实仅在领域审计中查询。关联选择器排除当前 Task。
+3. 编辑页在 Desktop 均复用纵向 Composer，并回填元数据、关联 Task、全部现有 Owner/Participant（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。最终 schema 不存在 `LEAD/MEMBER/REVIEWER/VIEWER` 运行时成员，旧事实仅在领域审计中查询。关联选择器排除当前 Task。
 4. Owner 一次修改基本信息、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
 5. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
 6. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
 7. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
-8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
+8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop 另覆盖长 Task、节点、成员、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
 ### Revision 通用 Composer 专项测试
 
 1. ACTIVE Task 的“发起 Revision”必须进入 `/progress/tasks/[id]/revisions/new`；非成员直达新建 URL 得到脱敏 404，非 ACTIVE 时返回 Task 工作台，已有 Candidate 时也返回工作台并展示“当前 Revision 候选”。
-2. Desktop 与 Pixel 5 均验证纵向 Composer：顶部使用与 Task 创建页一致的“基本信息 / 组织与分类 / 成员”结构并只读展示权威 Task 内容，不显示独立“Revision 信息 / 只读基线”；页面自动选中一个不可删除的当前 Revision 节点，Revision 名称、Revision 详细内容和 Revision 时间均在节点详情中填写且必填。Start/已完成 Milestone/已生效 Revision 只读，当前 Revision Marker 可调整且不切割阶段带，后续 Milestone 与 Terminal 可编辑；Desktop 的 Shift/框选只能组合当前 Revision 及后续可编辑节点，点击只读承接节点应切换到单节点查看且不能把它加入选中组，此时批量移动按钮禁用；重新选择当前 Revision 后按钮恢复可用。Pixel 5 不显示多选 UI 或批量移动入口。节点详情只显示红色校验提示框，不再重复显示“问题列表”。创建按钮为“创建并送审”，成功返回 Task 工作台并持久化 `PENDING_APPROVAL`，工作台候选卡片与批准后的 Current Plan 节点详情均回显名称和详细内容。
-3. Desktop 与 Pixel 5 在 Revision 等待审批时验证 Current Plan、自动候选 Plan、历史 Plan 和人员投入的顺序；候选行回显修改后的 Milestone/Terminal、使用“待审批候选”语义且无编辑入口。提交人可查看但无批准按钮，管理员比较后批准会持久化目标 Plan 为 Current；异常基线场景显示警告、批准禁用且仍能驳回。两种视口均不得横向溢出、出现 Next.js 错误覆盖层或未捕获浏览器错误。
+2. Desktop 均验证纵向 Composer：顶部使用与 Task 创建页一致的“基本信息 / 组织与分类 / 成员”结构并只读展示权威 Task 内容，不显示独立“Revision 信息 / 只读基线”；页面自动选中一个不可删除的当前 Revision 节点，Revision 名称、Revision 详细内容和 Revision 时间均在节点详情中填写且必填。Start/已完成 Milestone/已生效 Revision 只读，当前 Revision Marker 可调整且不切割阶段带，后续 Milestone 与 Terminal 可编辑；Desktop 的 Shift/框选只能组合当前 Revision 及后续可编辑节点，点击只读承接节点应切换到单节点查看且不能把它加入选中组，此时批量移动按钮禁用；重新选择当前 Revision 后按钮恢复可用。节点详情只显示红色校验提示框，不再重复显示“问题列表”。创建按钮为“创建并送审”，成功返回 Task 工作台并持久化 `PENDING_APPROVAL`，工作台候选卡片与批准后的 Current Plan 节点详情均回显名称和详细内容。
+3. Desktop 在 Revision 等待审批时验证 Current Plan、自动候选 Plan、历史 Plan 和人员投入的顺序；候选行回显修改后的 Milestone/Terminal、使用“待审批候选”语义且无编辑入口。提交人可查看但无批准按钮，管理员比较后批准会持久化目标 Plan 为 Current；异常基线场景显示警告、批准禁用且仍能驳回。统一界面不得横向溢出、出现 Next.js 错误覆盖层或未捕获浏览器错误。
 4. 被驳回记录的“修改并重新送审”进入 `/progress/tasks/[id]/revisions/[revisionId]/edit`；仅创建人（仍有 `revision.create`）或 Owner/全局管理员可进入。保存按钮同为“修改并重新送审”，成功后 `reviewRound + 1` 且直接回到待审批，不存在 Draft/Submit。
 5. Revision 本地草稿按环境、账号、Task、基线计划/锁或 Revision/候选 `updatedAt` 隔离；刷新后可恢复 Revision 名称、Revision 详细内容、revisionAt、节点、选中项与最后合法画布位置。版本冲突不得覆盖服务端，必须保留并允许导出或显式放弃加载最新版本；成功清理失败不得伪装成服务端失败。
 
@@ -444,18 +475,18 @@ npm run test:node
 ## 管理员面板测试
 
 1. 统一超级管理员进入 `/admin/accounts`，应看到「车组职责配置」「技术组职责配置」「用户与角色」三块；非超管和项目管理员访问页面或直接调用账号搜索/角色 Server Action 均被拒绝。`/admin/roles` 必须返回 404。
-2. 在车组和技术组职责矩阵中搜索账号并就地添加/移除四类报销角色；指导老师支持保存和清除审批邮箱，邮箱规范化结果应立即回显并写入安全审计。Desktop 使用职责表格，Pixel 5 使用纵向职责卡片，两种视口均不得横向滚动。
+2. 在车组和技术组职责矩阵中搜索账号并就地添加/移除四类报销角色；指导老师支持保存和清除审批邮箱，邮箱规范化结果应立即回显并写入安全审计。统一使用职责表格，窄窗口通过表格容器滚动查看完整内容。
 3. 在「用户与角色」表单中搜索统一账号，授予项目管理员或带范围的报销角色；重复授予显示角色已存在。授予超级管理员以及撤销超级管理员/项目管理员必须确认，报销角色从标签直接移除并显示结果 toast。
 4. 按姓名、角色、车组和技术组筛选账号，验证 30 条服务端分页；空结果显示中文空状态。账号表/移动卡片应展示当前项目与报销角色，并可打开「查看记录」弹窗查看飞书身份、角色历史和安全审计。
 5. 对角色增删验证 UI、数据库活跃/撤销记录、角色历史、安全审计、站内通知和 mandatory outbox 一致；项目角色 UI 不得提供 `GROUP_LEADER`，直接提交该角色也必须被服务端拒绝。页面不得出现项目访问启用/禁用筛选或操作。
 6. Person 为 `INACTIVE` 的统一账号仍可进入 `/progress` 并读取全部未删除历史数据，但创建 Task、修改项目业务、新增 Segment 和所有采购写入都必须由服务端拒绝；项目与采购 UI 均呈现只读，该 Person 不可作为新增成员或新通知收件人，历史成员和历史 Segment 继续展示。账号后台当前成员列表、职责矩阵和选择器不展示该 Person，但既有历史事实不得物理删除。
 7. 验证禁止自撤销超级管理员、最后一名超管保护、最后一名可用全局审批人保护、重复提交幂等和可理解的中文错误。
-8. 使用长姓名、多角色、身份缺失、缺少报销 User、空职责和长错误消息验证 Desktop/Pixel 5；选择器弹层、职责卡片、账号列表和记录弹窗均不得造成横向滚动。
+8. 使用长姓名、多角色、身份缺失、缺少报销 User、空职责和长错误消息验证 Desktop；选择器弹层、职责卡片、账号列表和记录弹窗均不得造成横向滚动。
 9. 对失败 outbox 执行重试，期望状态变化且不重复发送已成功收件人。
-10. 在 `/admin/system` 触发飞书用户同步，期望同步结果 toast 显示新增、更新、停用和恢复数量。飞书鉴权、网络、HTTP 或响应失败时，Desktop/Pixel 5 均应显示白名单化中文错误，不出现生产 Server Components 通用错误，也不得把原始响应或内部异常返回客户端；`tests/feishu-user-sync-action-result.spec.ts` 覆盖错误分类与脱敏。`tests/feishu-user-sync.spec.ts` 验证跨部门离职合并、快照缺席成员停用、返岗成员恢复、历史采购/角色关系保留、领域审计完整和冲突回滚后的脱敏审计；同一套回归还应让快照同时包含新人和超过 30% 的待停用成员，第一次通过公共 API 获得确认令牌并回滚，第二次先证明已撤权确认人携正确令牌仍整批失败且不写确认审计，再由在职超级管理员在独立事务成功创建新人、停用成员并写确认审计；普通比例的手动同步还需在等待管理员集合锁后复核发起人权限，模拟撤权先提交时应拒绝同步，并保证新人身份、返岗 Person 状态和审计零写入。人工另验证根部门授权缺失、分页不完整、快照变化令旧确认失效，以及最后一名有效全局管理员缺失时同步整批拒绝。`tests/inactive-person-procurement-safety.spec.ts` 与项目生命周期回归另验证停用人员只读历史、不能写入、不能删除采购历史订单或成为订单通知收件人；停用反馈账号会在 Desktop/Pixel 5 真实提交新反馈和回复既有反馈，均显示中文拒绝且 Feedback、Message、FileAsset、outbox 零新增。该组还覆盖同步停用与采购写入的 Person 行锁并发顺序；`tests/global-time-markers.spec.ts` 验证停用超级管理员不能保存全局关键时间点；`tests/account-management.spec.ts` 和 `tests/project-establishment.spec.ts` 分别验证通讯录与账号权限反序 Person 锁、全局角色撤销及立项提交的锁顺序，释放后并发操作均完成且不发生死锁；`tests/procurement-budget-import-atomicity.spec.ts` 验证已撤权超级管理员在预算写事务内被拒绝且预算零写入。
+10. 在 `/admin/system` 触发飞书用户同步，期望同步结果 toast 显示新增、更新、停用和恢复数量。飞书鉴权、网络、HTTP 或响应失败时，Desktop 均应显示白名单化中文错误，不出现生产 Server Components 通用错误，也不得把原始响应或内部异常返回客户端；`tests/feishu-user-sync-action-result.spec.ts` 覆盖错误分类与脱敏。`tests/feishu-user-sync.spec.ts` 验证跨部门离职合并、快照缺席成员停用、返岗成员恢复、历史采购/角色关系保留、领域审计完整和冲突回滚后的脱敏审计；同一套回归还应让快照同时包含新人和超过 30% 的待停用成员，第一次通过公共 API 获得确认令牌并回滚，第二次先证明已撤权确认人携正确令牌仍整批失败且不写确认审计，再由在职超级管理员在独立事务成功创建新人、停用成员并写确认审计；普通比例的手动同步还需在等待管理员集合锁后复核发起人权限，模拟撤权先提交时应拒绝同步，并保证新人身份、返岗 Person 状态和审计零写入。人工另验证根部门授权缺失、分页不完整、快照变化令旧确认失效，以及最后一名有效全局管理员缺失时同步整批拒绝。`tests/inactive-person-procurement-safety.spec.ts` 与项目生命周期回归另验证停用人员只读历史、不能写入、不能删除采购历史订单或成为订单通知收件人；停用反馈账号会在 Desktop 真实提交新反馈和回复既有反馈，均显示中文拒绝且 Feedback、Message、FileAsset、outbox 零新增。该组还覆盖同步停用与采购写入的 Person 行锁并发顺序；`tests/global-time-markers.spec.ts` 验证停用超级管理员不能保存全局关键时间点；`tests/account-management.spec.ts` 和 `tests/project-establishment.spec.ts` 分别验证通讯录与账号权限反序 Person 锁、全局角色撤销及立项提交的锁顺序，释放后并发操作均完成且不发生死锁；`tests/procurement-budget-import-atomicity.spec.ts` 验证已撤权超级管理员在预算写事务内被拒绝且预算零写入。
    `tests/feishu-user-sync-action-result.spec.ts` 还会通过仅受控 Playwright 服务开放的测试夹具直接调用 Server Action：未登录与非超级管理员分别返回 `UNAUTHENTICATED`/`FORBIDDEN` 且账号、身份、人员、用户、角色和审计记录计数不变；超级管理员调用则越过鉴权并由飞书出站守卫形成安全 `FEISHU_UNAVAILABLE` 结果。`tests/logger.spec.ts` 验证底层网络 cause、错误代码和堆栈经递归脱敏后仍保留，同时稳定的 `syncFailureCode` 不会被 logger 的异常类名覆盖。
-11. 在 `/admin/time-markers` 新增名称和上海时间，保存后从数据库核对 UTC 时间；再用桌面鼠标、Pixel 5 触摸和键盘方向键移动胶囊，确认表单仅产生本地草稿，点击「保存全部」后才原子生效。保存 pending 时输入与拖动必须同时禁用；删除应为软删除并保留逐项审计；非超级管理员直接调用 Server Action 必须被拒绝。重复提交、集合版本冲突、同名/同刻、空列表、200/201 项边界、100/101 字名称、重复 ID 及数据库名称/有限时间约束均需覆盖。两个页面制造集合冲突时应保留旧草稿并展示最新集合；站内链接和浏览器后退都必须确认未保存草稿。
-12. Desktop 与 Pixel 5 均确认管理员画布没有“全局关键节点”独立标题行，拖动区显示名称、上海日期时间和对应竖线；纵向日期网格与业务行一致，当前时间红线从轴贯穿拖动区且层级高于关键点，页面无横向溢出。个人、资源、Task、Project 业务画布不新增独立行，只显示名称和对应竖线，时间仅保留在 `title`/无障碍文本中，空业务行仍显示关键点；密集长名称必须聚合且可通过键盘/鼠标/触摸打开详情、选择具体点，胶囊不得相互遮挡。桌面 Composer 同样可见并对极远日期保持最多三年逻辑窗口，Pixel 5 沿用既有纵向 Composer、无桌面 TimeCanvas。关键时间点不得抢占业务内容初始中心，也不得产生站内通知、飞书消息或 outbox。
+11. 在 `/admin/time-markers` 新增名称和上海时间，保存后从数据库核对 UTC 时间；再用鼠标、触摸和键盘方向键移动胶囊，确认表单仅产生本地草稿，点击「保存全部」后才原子生效。保存 pending 时输入与拖动必须同时禁用；删除应为软删除并保留逐项审计；非超级管理员直接调用 Server Action 必须被拒绝。重复提交、集合版本冲突、同名/同刻、空列表、200/201 项边界、100/101 字名称、重复 ID 及数据库名称/有限时间约束均需覆盖。两个页面制造集合冲突时应保留旧草稿并展示最新集合；站内链接和浏览器后退都必须确认未保存草稿。
+12. Desktop 均确认管理员画布没有“全局关键节点”独立标题行，拖动区显示名称、上海日期时间和对应竖线；纵向日期网格与业务行一致，当前时间红线从轴贯穿拖动区且层级高于关键点，页面无横向溢出。个人、资源、Task、Project 业务画布不新增独立行，只显示名称和对应竖线，时间仅保留在 `title`/无障碍文本中，空业务行仍显示关键点；密集长名称必须聚合且可通过键盘/鼠标/触摸打开详情、选择具体点，胶囊不得相互遮挡。桌面 Composer 同样可见并对极远日期保持最多三年逻辑窗口。关键时间点不得抢占业务内容初始中心，也不得产生站内通知、飞书消息或 outbox。
 
 通讯录回归还需验证：当“全部成员”授权按飞书接口语义只返回根部门下的一级部门、未返回虚拟根 ID `0` 时，直接读取根部门成功后继续同步；根部门不可读时必须在拉取任何成员前拒绝。没有一级部门时不得把空 `department_ids` 误判为部分授权，但最终在职成员快照为空仍须零写入拒绝。
 
@@ -492,12 +523,12 @@ Revision 候选结构回归会篡改后缀去复用基础 Plan 的未完成 Mile
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、零成员或仅 Participant 草稿、创建者不被隐式写为 Owner、草稿创建者权限、激活时有效 Owner 门禁、幂等键冲突、Current Plan 持久化、0/200/201 Milestone 边界、Start/Milestone/Terminal 严格递增、Terminal 名称传播、零 Milestone 激活 Terminal、并发/过期锁拒绝、Revision 创建即待审批、驳回后修改直接重新送审、review round 通知键、Participant/Owner 的 Revision 管理边界、管理员批准/驳回和自审、Revision 目标 Plan 关联漂移、缺失已生效 Revision 沿用节点或混入其他 Revision 时 Workspace 不下发候选正文且直接审批 action 零写入拒绝、Revision 生效前基础 Plan 不可查询、生效后按 Task/Current Plan 归属安全读取、跨 Task 查询拒绝、零活跃审批人或全部管理员无有效飞书身份时整事务回滚、Planned Segment 待确认标记、Revision 生效不改写 Segment、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、按节点查询实际完成时间与多轮验收中的最终通过 Evidence 及确定性顺序、Workspace/历史计划 DTO 不扩充材料正文、Termination Review 的提交/通过/驳回/要求修订与四种 outcome、相同请求键幂等与不同键冲突、Milestone/Revision/Terminal 跨类型门禁、审批终态释放、重提重新竞争、并发只保留一个待审批、仅管理员审批推进、全员查询、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖统一投入 CRUD、全员读取、本人/负责人/管理员的允许与拒绝路径、任务成员关联、停用人员限制、旧入参拒绝、stale 安全 DTO、事务审计、并发更新唯一成功和软删除幂等；不再执行计划/实际确认或批量流程。
 7. `tests/project-management-resource-removal-migration.spec.ts` 从完整前置迁移链创建隔离 PostgreSQL 数据库，写入旧 allocation、Conflict、通知、outbox、checkpoint 和审计数据；应用删除 migration 后验证目标对象消失，普通 Segment、通知、outbox 与审计保留，历史 JSON 只清除顶层 `allocation`。
-8. `tests/project-management-ui-composer.spec.ts`、`project-management-ui-workbench.spec.ts`、`project-management-ui-resource-planner.spec.ts`、`project-management-person-kanban.spec.ts`、`project-management-ui-routes-responsive.spec.ts`、`global-time-markers-ui.spec.ts` 和 `project-management-s3-shell.spec.ts` 分别覆盖 Composer、工作台、资源计划、人员看板、路由/响应式、全局关键时间点以及共享壳。人员看板查询边界另由 `project-management-person-kanban-query.spec.ts` 验证。它们验证 `/progress` 统一我的工作、全员只读人员看板、全员 Task 工作台、全员资源计划、站内通知中心、桌面/移动视口、Task 创建/统一 DRAFT 编辑、严格时间顺序、画布/节点表/Inspector 联动、本地草稿恢复与版本冲突、分层权限、审批门禁、旧 URL 及已退役比例/冲突入口；草稿允许零成员或仅 Participant 且不隐式加入创建者，激活前及 ACTIVE 成员修改仍校验负责人，成员集合错误需显示并聚焦成员区，但不得把负责人或可选参与人员的搜索框标记为无效。Task 工作台还覆盖多条已生效 Revision 的基础 Plan 复选框、按需 loading/失败重试、只读历史行倒序、取消隐藏和页面缓存；当前待审批 Milestone 必须向提交人和审批人展示 TEXT/LINK、空证据、历史 FILE 及不安全链接降级状态，同时只有管理员显示审批控件；已完成 Milestone 详情还需展示持久化实际完成时间和最终材料；已完成 Terminal 展示实际结束时间、结束结果、原因和总结。资源计划还须覆盖七个 Task 状态复选框、默认草稿/进行中、空状态集合、终态切换、Task 搜索建议、`focus` 不绕过计划筛选、人员完整投入、快速创建内容默认为空，以及 `taskStatuses` 在复制/刷新/前进后退/缩放后的保留。所有改动 UI 用例必须同时在 Desktop `1440x1000` 与 Pixel 5 运行，并断言无横向溢出和浏览器异常。
+8. `tests/project-management-ui-composer.spec.ts`、`project-management-ui-workbench.spec.ts`、`project-management-ui-resource-planner.spec.ts`、`project-management-person-kanban.spec.ts`、`project-management-ui-routes-responsive.spec.ts`、`global-time-markers-ui.spec.ts` 和 `project-management-s3-shell.spec.ts` 分别覆盖 Composer、工作台、资源计划、人员看板、路由/响应式、全局关键时间点以及共享壳。人员看板查询边界另由 `project-management-person-kanban-query.spec.ts` 验证。它们验证 `/progress` 统一我的工作、全员只读人员看板、全员 Task 工作台、全员资源计划、站内通知中心、统一界面视口、Task 创建/统一 DRAFT 编辑、严格时间顺序、画布/节点表/Inspector 联动、本地草稿恢复与版本冲突、分层权限、审批门禁、旧 URL 及已退役比例/冲突入口；草稿允许零成员或仅 Participant 且不隐式加入创建者，激活前及 ACTIVE 成员修改仍校验负责人，成员集合错误需显示并聚焦成员区，但不得把负责人或可选参与人员的搜索框标记为无效。Task 工作台还覆盖多条已生效 Revision 的基础 Plan 复选框、按需 loading/失败重试、只读历史行倒序、取消隐藏和页面缓存；当前待审批 Milestone 必须向提交人和审批人展示 TEXT/LINK、空证据、历史 FILE 及不安全链接降级状态，同时只有管理员显示审批控件；已完成 Milestone 详情还需展示持久化实际完成时间和最终材料；已完成 Terminal 展示实际结束时间、结束结果、原因和总结。资源计划还须覆盖七个 Task 状态复选框、默认草稿/进行中、空状态集合、终态切换、Task 搜索建议、`focus` 不绕过计划筛选、人员完整投入、快速创建内容默认为空，以及 `taskStatuses` 在复制/刷新/前进后退/缩放后的保留。所有改动 UI 用例必须同时在 Desktop `1440x1000` 运行，并断言无横向溢出和浏览器异常。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 10. `tests/project-management-plan-mutations-draft.spec.ts`、`project-management-plan-mutations-active.spec.ts`、`project-management-plan-mutations-concurrency.spec.ts` 和 `project-management-plan-mutations-revision-time.spec.ts` 分别覆盖 Draft、Active、并发回滚与 Revision 时间规则；`tests/project-management-project-updates.spec.ts` 覆盖 Project 组合更新的单一聚合通知、前后成员并集、no-op 和无权限零副作用。共享 factory、副作用快照和数据库 barrier 位于 `tests/helpers/project-management-plan-mutation-fixtures.ts`。回归仍覆盖兼容及整包 mutation 的状态/权限/stale 矩阵、成员不变量、计划 ID 与时间边界、有界审计、`task_updated`/`project_updated` 收件人和中文变更项、专属成员/Project 事件边界、行锁顺序、exactly-once 和事务晚失败回滚；只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
 11. Canvas 安全回归按 `project-management-canvas-route-boundaries.spec.ts`、`project-management-canvas-option-safety.spec.ts`、`project-management-canvas-scope-permissions.spec.ts` 和 `project-management-canvas-adaptive-loading.spec.ts` 拆分；共享账号/Task/Segment factory 位于 `tests/helpers/project-management-canvas-security-fixtures.ts`。四组分别验证路由 session 绑定、选择器最小披露、scope 权限/半开区间和自适应块加载/对象预算。资源计划选择器领域回归必须验证默认/显式/空 Task 状态集合与 Project/Task 的交集、状态外 Task 成员不被派生、直接或 Project 选入人员仍展示状态外 Task 的完整投入，以及焦点 Task 不绕过状态筛选。
-12. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、停用人员保存偏好返回 `FORBIDDEN` 且零写入、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、可编辑偏好及停用后的只读开关。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
+12. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、停用人员保存偏好返回 `FORBIDDEN` 且零写入、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop 验证驾驶舱、待办、可编辑偏好及停用后的只读开关。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
 13. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock、5 秒六字段调度表达式及 notification outbox 进程内防重入；新增 migration 必须在 runner 随机 target 数据库从空库执行。
 14. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
 15. `tests/project-management-s10-release.spec.ts` 在 `node-db` project 执行一次运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
@@ -507,8 +538,8 @@ Revision 候选结构回归会篡改后缀去复用基础 Plan 的未完成 Mile
 19. `tests/revision-time-marker-migration.spec.ts` 在额外随机 `_test` PostgreSQL 中验证空 Revision 表升级、`revisionAt/reviewRound`、新状态枚举、单候选 partial unique index，以及存在旧 Revision 数据时在破坏性字段调整前 fail-fast。
 20. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
 21. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
-22. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并验证当前待审批轮次的提交人、时间、长 Task 名称/中文状态、零 Task 空状态及管理员/申请人权限，以及同页时间线与响应式三栏、旧详情链接、全部状态分组 Task、Project 成员外部/独立投入、悬浮 Task 名称、定位及计划轨道不重复；在领域层验证驳回重提、批准挂载、全量 Task 稳定排序、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
-23. `tests/project-management-legacy-history-retirement.spec.ts` 在 `node-db` project 执行一次并创建额外随机本机 `_test` 数据库，从完整 migration chain 升级前状态注入全部旧角色、0/100/小数/空完成比例及既有通知记录；验证活跃异常整事务阻断、迁移等待并发 writer 后归档最终值、迁移期间无关通知写入不被修改且不导致误回滚、显式结束后稳定归档、最终枚举/列、审计不可变、受控 `db:deploy` 记账与重复部署 no-op、旧 preflight 在最终 schema 可执行、current-head preflight 接受 openId 历史快照及撤销后重授和 Prisma schema drift。`tests/functional-panels.spec.ts` 在 Desktop 与 Pixel 5 验证账号历史能显示归档旧角色及 migration 审计来源。
+22. `tests/project-establishment.spec.ts` 在 Desktop 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并验证当前待审批轮次的提交人、时间、长 Task 名称/中文状态、零 Task 空状态及管理员/申请人权限，以及同页时间线与响应式三栏、旧详情链接、全部状态分组 Task、Project 成员外部/独立投入、悬浮 Task 名称、定位及计划轨道不重复；在领域层验证驳回重提、批准挂载、全量 Task 稳定排序、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
+23. `tests/project-management-legacy-history-retirement.spec.ts` 在 `node-db` project 执行一次并创建额外随机本机 `_test` 数据库，从完整 migration chain 升级前状态注入全部旧角色、0/100/小数/空完成比例及既有通知记录；验证活跃异常整事务阻断、迁移等待并发 writer 后归档最终值、迁移期间无关通知写入不被修改且不导致误回滚、显式结束后稳定归档、最终枚举/列、审计不可变、受控 `db:deploy` 记账与重复部署 no-op、旧 preflight 在最终 schema 可执行、current-head preflight 接受 openId 历史快照及撤销后重授和 Prisma schema drift。`tests/functional-panels.spec.ts` 在 Desktop 验证账号历史能显示归档旧角色及 migration 审计来源。
 
 ## 统一账号迁移验证
 
@@ -566,7 +597,7 @@ npm run pm:repair-task-approval-notifications -- --apply
 
 该历史版本需验证已发送消息保留、旧可重试审批 outbox 被明确冻结、每个当前待审批对象只生成一组按账号去重的全局管理员站内通知和 approval outbox、二次运行零重复，并确认没有真实飞书请求。包含 `20260805120000_single_task_pending_approval` 的当前版本不再执行这一步补发。
 
-部署单一 Task 审批门禁时不再为当前待审批对象补发通知。进入维护窗口后停止应用写入和通知 worker，保持 `NOTIFICATION_DELIVERY_DISABLED=true`，在隔离 PostgreSQL 先运行 `tests/single-task-approval-migration.spec.ts`，再执行 `npm run db:deploy`。迁移后必须确认未撤出的 `PENDING` Milestone Review 与 `PENDING_APPROVAL` Revision 总数均为零、Current Plan 和 Task 锁版本未变化、对应 outbox/recipient 已冻结且未读站内审批通知已读；任一断言失败不得恢复服务。随后运行生命周期定向测试、工作台 Desktop/Pixel 5 定向测试、`npm run check`、完整 `npm run test:e2e` 和 `npm run build`。
+部署单一 Task 审批门禁时不再为当前待审批对象补发通知。进入维护窗口后停止应用写入和通知 worker，保持 `NOTIFICATION_DELIVERY_DISABLED=true`，在隔离 PostgreSQL 先运行 `tests/single-task-approval-migration.spec.ts`，再执行 `npm run db:deploy`。迁移后必须确认未撤出的 `PENDING` Milestone Review 与 `PENDING_APPROVAL` Revision 总数均为零、Current Plan 和 Task 锁版本未变化、对应 outbox/recipient 已冻结且未读站内审批通知已读；任一断言失败不得恢复服务。随后运行生命周期定向测试、工作台 Desktop 定向测试、`npm run check`、完整 `npm run test:e2e` 和 `npm run build`。
 
 `tests/project-access-status-removal-migration.spec.ts` 从状态删除之前的完整 migration 链构造 ACTIVE/DISABLED 账号，验证管理员门禁先移除状态依赖、历史 DISABLED 账号逐一获得 `source=MIGRATION` 恢复审计、ACTIVE 账号无该审计、通知/outbox 数量不变、列与枚举删除且 append-only 审计触发器仍有效。`tests/fuzzy-search.spec.ts` 与 S2 option 安全测试覆盖标准化、拼音/顺序评分、AND 语义、50/501 边界、游标绑定和 resolver 不泄露。`tests/entity-picker.spec.ts` 通过仅在 runner-owned `_test` 数据库和通知禁发环境开放的 `/progress/entity-picker-fixtures`，确定性验证旧响应、分页和 resolver 竞态、失败重试、50 项上限、键盘独立投入及 disabled FormData 语义。
 
@@ -613,7 +644,7 @@ sudo systemctl status pnx-management-cron
 ### 代码审查 subagent
 
 ```text
-请对给定的本次差异和直接依赖做只读审查，先确认任务/验收标准、风险等级、差异基线和验证证据，区分本次改动与已有未提交工作。按实际影响检查正确性、权限/数据暴露、状态流转与并发、事务与审计、迁移兼容、Feishu/outbox/机器人路由/禁发/allowlist、上传安全、测试可靠性、桌面/移动端极端状态及无关改动。仅发现具体跨模块风险时扩大范围，不例行全仓审计；纯风格偏好不作为问题。不要修改代码。findings 按严重程度排序，包含路径、行号、风险、证据和修复建议；复审只检查修复差异及受影响结论。没有新增可执行问题时明确说明，并列出剩余风险或验证限制；无关发现单独报告，不扩大修复范围。
+请对给定的本次差异和直接依赖做只读审查，先确认任务/验收标准、风险等级、差异基线和验证证据，区分本次改动与已有未提交工作。按实际影响检查正确性、权限/数据暴露、状态流转与并发、事务与审计、迁移兼容、Feishu/outbox/机器人路由/禁发/allowlist、上传安全、测试可靠性、统一界面极端状态及无关改动。仅发现具体跨模块风险时扩大范围，不例行全仓审计；纯风格偏好不作为问题。不要修改代码。findings 按严重程度排序，包含路径、行号、风险、证据和修复建议；复审只检查修复差异及受影响结论。没有新增可执行问题时明确说明，并列出剩余风险或验证限制；无关发现单独报告，不扩大修复范围。
 ```
 
 ## 测试报告格式
@@ -642,7 +673,6 @@ Playwright 结果：
 - 反馈:
 - 管理员:
 - 实时同步:
-- 移动端:
 
 失败项：
 1. 严重程度：
@@ -662,6 +692,6 @@ Playwright 结果：
 ## 统一投入记录回归
 
 - `tests/project-management-segments.spec.ts` 覆盖 CRUD、过去/未来及重叠、旧入参拒绝、允许/拒绝授权、Task 关联和成员约束、权威 stale DTO、并发更新唯一成功、删除幂等及审计；操作不得新增 outbox 或站内通知。
-- `tests/project-management-ui-resource-planner.spec.ts` 在 Desktop `1440x1000` 和 Pixel 5 覆盖新表单及单条操作；共享画布继续覆盖空/长/密集内容、分块加载、未保存提示、任务节点交互、只读和无页面横向溢出。
+- `tests/project-management-ui-resource-planner.spec.ts` 在 Desktop `1440x1000` 覆盖新表单及单条操作；共享画布继续覆盖空/长/密集内容、分块加载、未保存提示、任务节点交互、只读和无页面横向溢出。
 - `tests/unified-work-segments-migration.spec.ts` 在受控 runner 的本机 `_test` 临时库验证完整迁移、可见集合/原 ID、归档来源和变更完整、只读保护、旧提醒取消、无关消息不变及 Prisma 结构一致。
 - 必须运行 `npm run check`、`npm run test:e2e`、`npm run build`；`npm run db:deploy` 的迁移验证必须显式指向隔离测试库。测试保持禁发开关和官方飞书出站 guard，不访问正常开发/生产数据库或真实收件人。

@@ -2,7 +2,7 @@ export const NOTIFICATION_OUTBOX_CRON = "*/5 * * * * *";
 export const DEFAULT_CONTACT_SYNC_CRON = "30 8 * * *";
 export const UPLOAD_CLEANUP_CRON = "*/10 * * * *";
 export const PROCUREMENT_BUDGET_CRON = "*/10 * * * *";
-export const PROJECT_MANAGEMENT_DAILY_CRON = "15 8 * * *";
+export const PROJECT_MANAGEMENT_DAILY_CRON = "* * * * *";
 export const PROCUREMENT_DAILY_CRON = "0 9 * * *";
 export const CRON_TIMEZONE = "Asia/Shanghai";
 

@@ -1,5 +1,6 @@
 import type { ResourcePlanTaskStatus } from "@/lib/project-management/resource-plan-url";
 import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import type { ReactNode } from "react";
 
 export type TimeCanvasMode =
   | "TASK_COMPOSER"
@@ -34,6 +35,7 @@ export type TimeCanvasRow = {
   label: string;
   sublabel: string | null;
   href?: string;
+  project?: { id: string; name: string } | null;
   editable: boolean;
   height: number;
   capacity: number | null;
@@ -230,7 +232,6 @@ export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
   enableAnchorMarqueeSelection?: boolean;
-  desktopOnlySegmentTransform?: boolean;
   creationRange?: TimeCanvasBrushRequest | null;
   selectedAnchorIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
@@ -280,4 +281,6 @@ export type TimeCanvasProps = {
   ) => void;
   onZoomChange?: (zoom: TimeCanvasZoom) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;
+  toolbarAction?: ReactNode;
+  highlightedRange?: TimeCanvasRange;
 };

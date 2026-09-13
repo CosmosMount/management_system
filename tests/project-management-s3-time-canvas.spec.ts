@@ -14,6 +14,7 @@ import {
 } from "../components/project-management/resource-planner-state";
 import {
   createEmptyTimeCanvasFixture,
+  createRowHeaderTimeCanvasFixture,
   createTimeCanvasFixture,
 } from "../components/project-management/time-canvas/fixtures";
 import {
@@ -51,6 +52,7 @@ import {
 import { timeCanvasDataDtoSchema } from "../lib/project-management/types/time-canvas";
 import { getAdaptiveTimeCanvasBlockInputSchema } from "../lib/project-management/validations/time-canvas";
 import { prisma } from "../lib/prisma";
+import { routes } from "../lib/routes";
 import {
   expectHealthyPage,
   loginAsTestUser,
@@ -604,36 +606,69 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(model.segments[0]).not.toHaveProperty("tags");
   });
 
-  test("TASK grouping rows expose their explicit Task detail href", () => {
-    const taskId = uuid(29);
-    const versionToken = new Date(RANGE.startMs).toISOString();
-    const data = timeCanvasDataDtoSchema.parse({
-      scope: { kind: "RESOURCE_PLANNER" },
-      timezone: "Asia/Shanghai",
-      range: {
-        startAt: versionToken,
-        endAt: new Date(RANGE.endMs).toISOString(),
-      },
-      groupBy: "TASK",
-      rows: [{
-        id: taskId,
-        kind: "TASK",
-        label: "Task 分组行",
-        sublabel: "进行中",
-        capabilities: { canCreateSegment: true },
-      }],
-      anchors: [],
-      segments: [],
-      generatedAt: versionToken,
-    });
+  for (const project of [{ id: "00000000-0000-4000-8000-00000000001c", name: "关联项目" }, null, undefined]) {
+    test(`TASK and PLAN rows preserve project metadata (${project === undefined ? "omitted" : project === null ? "null" : "linked"})`, () => {
+      const taskId = uuid(29);
+      const versionToken = new Date(RANGE.startMs).toISOString();
+      const data = timeCanvasDataDtoSchema.parse({
+        scope: { kind: "RESOURCE_PLANNER" },
+        timezone: "Asia/Shanghai",
+        range: {
+          startAt: versionToken,
+          endAt: new Date(RANGE.endMs).toISOString(),
+        },
+        groupBy: "TASK",
+        rows: [{
+          id: taskId,
+          kind: "TASK",
+          label: "Task 分组行",
+          ...(project === undefined ? {} : { project }),
+          sublabel: "进行中",
+          capabilities: { canCreateSegment: true },
+        }],
+        anchors: [{
+          id: taskId,
+          title: "计划轨道任务",
+          ...(project === undefined ? {} : { project }),
+          currentNodeDeadline: null,
+          status: "ACTIVE",
+          priority: "MEDIUM",
+          createdAt: versionToken,
+          plannedStartAt: versionToken,
+          capabilities: {
+            canView: true,
+            canUpdateMetadata: false,
+            canManageMembers: false,
+            canActivate: false,
+            canArchive: false,
+            canCreateRevision: false,
+          },
+          nodes: [],
+          updatedAt: versionToken,
+          versionToken,
+        }],
+        segments: [],
+        generatedAt: versionToken,
+      });
 
-    expect(timeCanvasDataToModel(data, "RESOURCE_PLANNER").rows[0]).toMatchObject({
-      id: `task:${taskId}`,
-      sourceId: taskId,
-      kind: "TASK",
-      href: `/progress/tasks/${taskId}`,
+      const model = timeCanvasDataToModel(data, "RESOURCE_PLANNER");
+      expect(model.rows.find((row) => row.kind === "TASK")).toMatchObject({
+        id: `task:${taskId}`,
+        sourceId: taskId,
+        kind: "TASK",
+        href: `/progress/tasks/${taskId}`,
+      });
+      expect(model.rows.find((row) => row.kind === "PLAN")).toMatchObject({
+        id: `plan:${taskId}`,
+        sourceId: taskId,
+        href: routes.progress.taskDetail(taskId),
+      });
+      expect(model.rows).toHaveLength(2);
+      for (const row of model.rows) {
+        expect(row.project ?? null).toEqual(project ?? null);
+      }
     });
-  });
+  }
 
   test("Active plan rails remain read-only even when metadata is editable", () => {
     const taskId = uuid(30);
@@ -694,6 +729,92 @@ test.describe("S3 TimeCanvas pure core", () => {
 });
 
 test.describe("S3 TimeCanvas controlled browser fixtures", () => {
+  test("shared RowHeader keeps project and task links independent with long and missing project names", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    const identity = await createCanvasBrowserIdentity();
+    await loginAsTestUser(context, baseURL, identity);
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto("/progress/time-canvas-fixtures?rowHeaders=1");
+    await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
+    const fixtureState = page.getByTestId("time-canvas-row-header-fixture-state");
+    await expect(fixtureState).toHaveAttribute("data-ready", "true");
+    const fixtureUrl = page.url();
+    await expectHealthyPage(page);
+    const project = { id: uuid(801), name: "超长关联项目名称".repeat(12) };
+    const taskId = uuid(802);
+    const taskName = "超长任务名称".repeat(12);
+    const rows = createRowHeaderTimeCanvasFixture().rows;
+    const destinationRequests: string[] = [];
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === routes.progress.projectDetail(project.id) || pathname === routes.progress.taskDetail(taskId)) {
+        destinationRequests.push(pathname);
+      }
+    });
+    let navigationCount = 0;
+
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const row of rows) {
+        const header = page.getByTestId(`time-canvas-row-header-${row.id}`);
+        await header.scrollIntoViewIfNeeded();
+        const taskLink = header.getByRole("link", { name: taskName, exact: true });
+        await expect(taskLink).toBeVisible();
+        await expect(taskLink).toHaveAttribute("title", taskName);
+        await expect(taskLink).toHaveAttribute("href", routes.progress.taskDetail(taskId));
+        await expect(header.getByRole("link")).toHaveCount(row.project ? 2 : 1);
+        if (row.project) {
+          const projectLink = header.getByRole("link", { name: project.name, exact: true });
+          await expect(projectLink).toBeVisible();
+          await expect(projectLink).toHaveAttribute("title", project.name);
+          await expect(projectLink).toHaveAttribute("href", routes.progress.projectDetail(project.id));
+          await expect(header).toHaveText(`${project.name}/${taskName}`);
+          await projectLink.click();
+          navigationCount += 1;
+          await expect(fixtureState).toHaveAttribute("data-navigation-count", String(navigationCount));
+          await expect(fixtureState).toHaveAttribute("data-row-id", row.id);
+          await expect(fixtureState).toHaveAttribute("data-href", routes.progress.projectDetail(project.id));
+          await expect(page).toHaveURL(fixtureUrl);
+          await projectLink.focus();
+          await page.keyboard.press("Tab");
+          await expect(taskLink).toBeFocused();
+          expect(await header.locator("a a").count()).toBe(0);
+        } else {
+          await expect(header).toHaveText(taskName);
+          await taskLink.focus();
+        }
+        await page.keyboard.press("Enter");
+        navigationCount += 1;
+        await expect(fixtureState).toHaveAttribute("data-navigation-count", String(navigationCount));
+        await expect(fixtureState).toHaveAttribute("data-row-id", row.id);
+        await expect(fixtureState).toHaveAttribute("data-href", routes.progress.taskDetail(taskId));
+        await expect(page).toHaveURL(fixtureUrl);
+        for (const link of await header.getByRole("link").all()) {
+          const bounds = await link.boundingBox();
+          const headerBounds = await header.boundingBox();
+          if (!bounds || !headerBounds) throw new Error("时间线表头链接缺少布局信息");
+          expect(bounds.width).toBeGreaterThan(0);
+          expect(bounds.x).toBeGreaterThanOrEqual(headerBounds.x);
+          expect(bounds.x + bounds.width).toBeLessThanOrEqual(headerBounds.x + headerBounds.width + 1);
+        }
+      }
+      await expectHealthyPage(page);
+      if (width === 1440) {
+        await page.screenshot({
+          path: testInfo.outputPath("timeline-task-headers.png"),
+          fullPage: true,
+        });
+      }
+    }
+    expect(destinationRequests).toEqual([]);
+    expect(browserErrors).toEqual([]);
+  });
+
   test("initial year layout reports the viewport even when scrollLeft remains zero", async ({
     context,
     page,
@@ -800,7 +921,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     const identity = await createCanvasBrowserIdentity();
     await loginAsTestUser(context, baseURL, identity);
     const browserErrors: string[] = [];
@@ -832,19 +953,14 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     }
 
     await page.goto(
-      `/progress/time-canvas-fixtures?mode=TASK_COMPOSER${
-        testInfo.project.name === "mobile" ? "&scale=week" : ""
-      }`,
+      "/progress/time-canvas-fixtures?mode=TASK_COMPOSER",
     );
     {
       await expect(
         page.getByTestId("phase-bands-plan:fixture-composer"),
       ).toBeVisible();
-      if (testInfo.project.name === "desktop") {
+      {
         await expect(page.locator("[data-canvas-object]")).toHaveCount(200);
-      } else {
-        await expect.poll(() => page.locator("[data-canvas-object]").count()).toBeGreaterThan(0);
-        expect(await page.locator("[data-canvas-object]").count()).toBeLessThan(200);
       }
       expect(
         await page.getByTestId("timeline-row-plan:fixture-composer").evaluate((row) => {
@@ -882,7 +998,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     await page.goto(
       "/progress/time-canvas-fixtures?mode=TASK_WORKBENCH",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       await expect(
         page.getByTestId("milestone-marker-workbench-node-0"),
       ).toHaveAttribute("data-anchor-icon", "CHECK");

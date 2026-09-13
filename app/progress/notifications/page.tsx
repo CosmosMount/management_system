@@ -17,6 +17,9 @@ import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { redirect } from "next/navigation";
 import { Bell, Settings } from "lucide-react";
+import { isSystemAdministrator } from "@/lib/project-management/authorization";
+import { listReminderSettings } from "@/app/actions/project-management/notifications";
+import { ReminderSettingsClient } from "@/components/project-management/reminder-settings-client";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -47,6 +50,7 @@ export default async function ProgressNotificationsPage({
         <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <NotificationViewNavigation params={params} settings />
           <NotificationPreferencesClient preferences={preferences} readOnly={actor.isActive === false} />
+          {isSystemAdministrator(actor) && <ReminderSettingsPanel />}
         </div>
       </>
     );
@@ -138,6 +142,17 @@ export default async function ProgressNotificationsPage({
       </div>
     </>
   );
+}
+
+async function ReminderSettingsPanel() {
+  let result: Awaited<ReturnType<typeof listReminderSettings>> | undefined;
+  try {
+    result = await listReminderSettings();
+  } catch {
+    result = undefined;
+  }
+  if (result?.ok) return <ReminderSettingsClient initial={result.data} />;
+  return <p role="alert" className="break-words text-sm text-destructive">{result?.error.message || "提醒配置加载失败，请刷新重试。"}</p>;
 }
 
 function NotificationViewNavigation({ params, settings = false }: { params: SearchParams; settings?: boolean }) {

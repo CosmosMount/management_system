@@ -398,8 +398,27 @@ export function auditReadableWhere(
 
 export function notificationReadableWhere(
   actor: ProjectManagementActor,
+  personalSummaries: { id: string; requiresApprovalAdministrator: boolean }[] = [],
 ): Prisma.InAppNotificationWhereInput {
-  return { recipientAccountId: actor.accountId };
+  const approvalAdministrator: Prisma.AccountWhereInput = {
+    person: { is: { status: "ACTIVE" } }, systemRoles: { some: {
+      role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] }, team: "", techGroup: "", revokedAt: null,
+    } },
+  };
+  return {
+    recipientAccountId: actor.accountId,
+    OR: [
+      { entityType: { notIn: ["AdminGlobalSummaryRun", "PersonalSummary"] } },
+      { entityType: "AdminGlobalSummaryRun", recipient: approvalAdministrator },
+      { entityType: "PersonalSummary", recipient: {
+        person: { is: { id: actor.personId, status: "ACTIVE" } },
+      }, OR: [
+        { entityId: { in: personalSummaries.filter((summary) => !summary.requiresApprovalAdministrator).map((summary) => summary.id) } },
+        { entityId: { in: personalSummaries.filter((summary) => summary.requiresApprovalAdministrator).map((summary) => summary.id) }, recipient: approvalAdministrator },
+      ],
+      },
+    ],
+  };
 }
 
 export function isSystemAdministrator(actor: ProjectManagementActor): boolean {

@@ -54,7 +54,7 @@ test("空任务工作台仍可悬浮、点击和键盘查看到期规则", async
   expect(errors).toEqual([]);
 });
 
-test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更新", async ({ page, context, baseURL }) => {
+test("工作台完整任务表保留风险排序，共享时钟跨界和聚焦更新", async ({ page, context, baseURL }) => {
   test.setTimeout(120_000);
   const owner = await createAccountPerson(`到期预览 ${randomUUID()}`);
   const nowMs = Date.now();
@@ -70,12 +70,15 @@ test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更�
   await page.goto("/progress");
   const region = page.getByRole("region", { name: "参与任务", exact: true });
   await expectDeadlineRulesInteraction(page);
-  await expect(region.getByRole("listitem")).toHaveCount(6);
-  await expect(region.getByRole("listitem").first()).toHaveAttribute("data-testid", `participating-task-${overdue.taskId}`);
+  const table = region.getByRole("table", { name: "参与任务列表" });
+  await expect(table.locator("tbody tr")).toHaveCount(8);
+  await expect(table.locator("tbody tr").first()).toHaveAttribute("data-testid", `participating-task-${overdue.taskId}`);
+  await expect(table.getByRole("columnheader", { name: "版本", exact: true })).toBeAttached();
+  await expect(table.locator("tbody tr").first().getByRole("cell").last()).toHaveText("v1");
   const soonRow = region.getByTestId(`participating-task-${soon.taskId}`);
   await expect(soonRow.locator('[data-deadline-status="DUE_SOON"]')).toHaveText("即将到期");
-  await expect(region.getByRole("list").locator('[data-deadline-status="NOT_DUE"]')).toHaveCount(4);
-  await expect(region.getByRole("list").locator('[data-deadline-status="NOT_DUE"]').first()).toHaveText("距到期超过 3 天");
+  await expect(table.locator('[data-deadline-status="NOT_DUE"]')).toHaveCount(6);
+  await expect(table.locator('[data-deadline-status="NOT_DUE"]').first()).toHaveText("距到期超过 3 天");
   await expectHealthyPage(page);
   await region.screenshot({ path: test.info().outputPath("deadline-workbench.png"), animations: "disabled" });
   await page.clock.fastForward(25 * 60 * 60_000);
@@ -83,8 +86,8 @@ test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更�
   await page.clock.setSystemTime(new Date(nowMs));
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(soonRow.locator('[data-deadline-status="DUE_SOON"]')).toBeVisible();
-  await region.getByRole("link", { name: /查看全部参与任务/ }).click();
-  await expect(page.getByTestId(`task-list-item-${overdue.taskId}`).getByText("已逾期", { exact: true })).toBeVisible();
+  await region.getByTestId(`participating-task-${overdue.taskId}`).getByRole("link").click();
+  await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${overdue.taskId}`);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
 });

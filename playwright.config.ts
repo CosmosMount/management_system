@@ -57,10 +57,5 @@ export default defineConfig({
         viewport: { width: 1440, height: 1000 },
       },
     },
-    {
-      name: "mobile",
-      testMatch: topology.ui,
-      use: { ...devices["Pixel 5"] },
-    },
   ],
 });

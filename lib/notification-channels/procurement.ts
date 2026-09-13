@@ -36,27 +36,22 @@ import { NonRetryableNotificationError } from "@/lib/notification-channel-adapte
 import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
 import type { FeishuSendResult } from "@/lib/feishu-message";
 import { filterActiveFeishuOpenIds } from "@/lib/active-account";
+import { parseNotificationPayload } from "@/lib/notification-payload";
 
 function parseRow(row: NotificationOutbox): {
   data: OrderOutboxPayload;
   botKind: FeishuBotKind;
 } {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(row.payload);
-  } catch {
-    throw new NonRetryableNotificationError("采购通知 payload 不是有效 JSON");
-  }
-  const result = orderOutboxPayloadSchema.safeParse(decoded);
-  if (!result.success) {
-    throw new NonRetryableNotificationError("采购通知 payload 不符合持久化契约");
-  }
-  const data = result.data as OrderOutboxPayload;
-  if (row.type !== data.kind) {
-    throw new NonRetryableNotificationError(
-      `采购通知元数据不一致：type=${row.type}，payload.kind=${data.kind}`,
-    );
-  }
+  const data: OrderOutboxPayload = parseNotificationPayload(
+    row,
+    orderOutboxPayloadSchema,
+    {
+      invalidJson: "采购通知 payload 不是有效 JSON",
+      invalidPayload: "采购通知 payload 不符合持久化契约",
+      metadata: (kind) =>
+        `采购通知元数据不一致：type=${row.type}，payload.kind=${kind}`,
+    },
+  );
   if (row.botKind !== "notification" && row.botKind !== "approval") {
     throw new NonRetryableNotificationError(
       `采购通知机器人类型无效：${row.botKind}`,

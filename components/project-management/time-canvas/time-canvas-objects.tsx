@@ -84,7 +84,7 @@ export function SegmentBlock({
     direction: -1 | 1,
   ) {
     const onSegmentTransform = interaction?.onSegmentTransform;
-    if (!onSegmentTransform || !directSegmentTransformAllowed(interaction)) return;
+    if (!onSegmentTransform) return;
     if (kind === "KEYBOARD_MOVE" && !segment.permissions.canMove) return;
     if (kind === "RESIZE_END" && !segment.permissions.canResize) return;
     const duration = segment.endMs - segment.startMs;
@@ -117,7 +117,7 @@ export function SegmentBlock({
       type="button"
       className={cn(
         "absolute z-10 flex h-5 min-w-px items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-        interaction?.desktopOnlySegmentTransform ? "sm:touch-none" : "touch-none",
+        "touch-none",
         segment.type === "WORK" &&
           "border border-sky-600 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
         segment.type === "BUSY" &&
@@ -166,7 +166,7 @@ export function SegmentBlock({
         }
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !directSegmentTransformAllowed(interaction)) return;
+        if (event.button !== 0 || !interaction?.onSegmentTransform) return;
         const target = event.target;
         const handle =
           target instanceof HTMLElement
@@ -258,7 +258,6 @@ export function SegmentBlock({
         <span
           className={cn(
             "absolute inset-y-0 left-0 w-2 max-w-[25%] cursor-ew-resize",
-            interaction.desktopOnlySegmentTransform && "hidden sm:block",
           )}
           data-resize-handle="start"
           aria-hidden="true"
@@ -269,7 +268,6 @@ export function SegmentBlock({
         <span
           className={cn(
             "absolute inset-y-0 right-0 w-2 max-w-[25%] cursor-ew-resize",
-            interaction.desktopOnlySegmentTransform && "hidden sm:block",
           )}
           data-resize-handle="end"
           aria-hidden="true"
@@ -590,13 +588,6 @@ export function AnchorMarker({
       )}
     </button>
   );
-}
-function directSegmentTransformAllowed(
-  interaction: TimeCanvasInteractionOptions | undefined,
-) {
-  if (!interaction?.onSegmentTransform) return false;
-  return !interaction.desktopOnlySegmentTransform ||
-    window.matchMedia("(min-width: 640px)").matches;
 }
 function segmentAriaLabel(segment: TimeCanvasSegment) {
   const type = segment.type === "BUSY" ? "其他占用" : "投入记录";

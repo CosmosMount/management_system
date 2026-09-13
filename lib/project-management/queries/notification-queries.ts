@@ -80,7 +80,7 @@ export async function listInAppNotifications({
   );
   const where: Prisma.InAppNotificationWhereInput = {
     AND: [
-      notificationReadableWhere(actor),
+      await getNotificationReadableWhere(actor),
       parsed.unreadOnly ? { readAt: null } : {},
       parsed.category ? { category: parsed.category } : {},
     ],
@@ -190,7 +190,7 @@ export async function getUnreadInAppNotificationCount(
 ): Promise<number> {
   return prisma.inAppNotification.count({
     where: {
-      AND: [notificationReadableWhere(actor), { readAt: null }],
+      AND: [await getNotificationReadableWhere(actor), { readAt: null }],
     },
   });
 }
@@ -233,11 +233,21 @@ async function visibleTaskTitleMap(
   return new Map(rows.map((task) => [task.id, task.title]));
 }
 
-export function notificationReadWhere(
+export async function getNotificationReadableWhere(
+  actor: ProjectManagementActor,
+): Promise<Prisma.InAppNotificationWhereInput> {
+  const personalSummaries = actor.isActive === false ? [] : await prisma.personalSummary.findMany({
+    where: { accountId: actor.accountId, account: { person: { is: { id: actor.personId, status: "ACTIVE" } } } },
+    select: { id: true, requiresApprovalAdministrator: true },
+  });
+  return notificationReadableWhere(actor, personalSummaries);
+}
+
+export async function notificationReadWhere(
   actor: ProjectManagementActor,
   notificationId: string,
-): Prisma.InAppNotificationWhereInput {
+): Promise<Prisma.InAppNotificationWhereInput> {
   return {
-    AND: [{ id: notificationId }, notificationReadableWhere(actor)],
+    AND: [{ id: notificationId }, await getNotificationReadableWhere(actor)],
   };
 }

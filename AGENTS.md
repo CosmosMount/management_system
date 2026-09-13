@@ -76,7 +76,7 @@ Business correctness, server-side permissions, auditability, and notification sa
 - Reuse UI primitives; preserve semantic controls, associated labels, keyboard operation, visible focus, and meaningful button names.
 - Handle applicable loading, success, empty, disabled, and error states. Show actionable field-level errors and reveal/focus the first invalid field when practical.
 - Avoid assumptions about ideal content length or record counts. Preserve stable accessible selectors or intentional `data-testid` values, not fragile CSS structure.
-- For affected UI, test Desktop `1440x1000` and Pixel 5. Cover applicable long names/messages, missing data, dense lists, slow/loading states, read-only/denied access, and terminal/exceptional statuses; prevent horizontal overflow.
+- All devices use the same navigation, components, and business controls; do not add device-specific alternatives or hide features by screen width. For affected UI, test Desktop `1440x1000` and a narrow-window check of the same interface. Cover applicable long names/messages, missing data, dense lists, slow/loading states, read-only/denied access, and terminal/exceptional statuses; prevent page-level horizontal overflow while retaining intentional content/table/timeline scrolling.
 
 ### Documentation
 
@@ -91,7 +91,7 @@ Choose gates by the impact of the whole task, not just the last edited file. Com
 | --- | --- |
 | Documentation/comments only, no executable behavior change | Task-scoped `git diff --check`; check affected links, paths, commands, and policy consistency. No application tests by default. |
 | Local, non-high-risk code or tests | `npm run check` plus affected tests. No full E2E by default. |
-| New or changed UI behavior | The code gate plus affected Playwright UI specs in both `desktop` and `mobile`; verify applicable edge states. |
+| New or changed UI behavior | The code gate plus affected Playwright UI specs in the shared `desktop` project; verify applicable edge states. |
 | Authentication/permissions, state transitions, database, notifications, uploads, shared infrastructure, or cross-module behavior | `npm run check` plus full `npm run test:e2e`, with relevant domain/concurrency/side-effect coverage. |
 | Merge or release acceptance | `npm run check` plus full `npm run test:e2e` and applicable build/migration/specialist checks; local or smoke results alone do not certify acceptance. |
 
@@ -120,7 +120,7 @@ Choose gates by the impact of the whole task, not just the last edited file. Com
 - Self-review the entire task diff, including preservation of pre-existing user changes. Ordinary code changes require one independent subagent/reviewer pass at completion; high-risk work requires a pass for each coherent, independently verifiable stage.
 - Pure wording changes normally need only self-review. Changes to safety rules, validation gates, or review policy always require independent review even when documentation-only.
 - Give reviewers the task/acceptance criteria, exact diff or baseline, risk level, and validation evidence. Review the task diff and direct dependencies first; expand only for a concrete cross-module risk, not a routine whole-repository audit.
-- Review applicable correctness, authorization/data exposure, state/concurrency/transactions, audit/error handling, Feishu/outbox safety, coverage reliability, desktop/mobile edge states, and unnecessary scope/abstraction.
+- Review applicable correctness, authorization/data exposure, state/concurrency/transactions, audit/error handling, Feishu/outbox safety, coverage reliability, shared-interface edge states, and unnecessary scope/abstraction.
 - Fix in-scope actionable findings, rerun affected checks, and request incremental re-review of fixes and affected conclusions until no new actionable issues remain. Reuse prior evidence for unchanged areas; stylistic preference alone is not an actionable finding. Report unrelated issues instead of silently fixing them.
 - Do not declare completion with an unresolved in-scope high-severity issue or required gate/review incomplete. If tooling blocks review, report the limitation and unresolved findings explicitly.
 

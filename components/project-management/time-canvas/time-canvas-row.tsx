@@ -609,7 +609,7 @@ function CreationRangeBlock({
     <button
       type="button"
       className={cn(
-        "pointer-events-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15 text-[10px] font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring sm:pointer-events-auto sm:touch-none",
+        "pointer-events-auto touch-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15 text-[10px] font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring",
         dropState === "valid" && "border-emerald-600 bg-emerald-100/70 text-emerald-900",
         dropState === "invalid" && "border-destructive bg-destructive/15 text-destructive",
       )}
@@ -772,13 +772,13 @@ function CreationRangeBlock({
       }}
     >
       <span
-        className="absolute inset-y-0 left-0 hidden w-3 cursor-ew-resize sm:block"
+        className="absolute inset-y-0 left-0 w-3 cursor-ew-resize"
         data-create-resize-handle="start"
         aria-hidden="true"
       />
       <span className="sr-only">待创建投入</span>
       <span
-        className="absolute inset-y-0 right-0 hidden w-3 cursor-ew-resize sm:block"
+        className="absolute inset-y-0 right-0 w-3 cursor-ew-resize"
         data-create-resize-handle="end"
         aria-hidden="true"
       />

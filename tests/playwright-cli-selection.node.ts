@@ -34,8 +34,8 @@ test("Playwright CLI selection 区分全集、局部和项目过滤并 fail clos
     ["--project=d*"],
     ["--project=*"],
     ["--project", "desktop"],
-    ["--project", "desktop", "mobile"],
-    ["--list", "--project=desktop", "--project=mobile"],
+    ["--project", "desktop", "node-db"],
+    ["--list", "--project=desktop"],
   ];
   for (const args of fullSelections) {
     assert.equal(playwrightTopologySelectionMode(args), "full");
@@ -87,30 +87,30 @@ test("Playwright CLI selection 区分全集、局部和项目过滤并 fail clos
   );
   assert.deepEqual(
     selectedPlaywrightProjectNames(
-      ["node-db", "desktop", "mobile"],
+      ["node-db", "desktop"],
       ["Desktop"],
     ),
     ["desktop"],
   );
   assert.deepEqual(
-    selectedPlaywrightProjectNames(["node-db", "desktop", "mobile"], ["d*"]),
+    selectedPlaywrightProjectNames(["node-db", "desktop"], ["d*"]),
     ["desktop"],
   );
   assert.deepEqual(
-    selectedPlaywrightProjectNames(["node-db", "desktop", "mobile"], ["*"]),
-    ["node-db", "desktop", "mobile"],
+    selectedPlaywrightProjectNames(["node-db", "desktop"], ["*"]),
+    ["node-db", "desktop"],
   );
   assert.throws(
     () =>
       selectedPlaywrightProjectNames(
-        ["node-db", "desktop", "mobile"],
+        ["node-db", "desktop"],
         ["missing"],
       ),
     /not found/,
   );
   assert.throws(
     () =>
-      selectedPlaywrightProjectNames(["node-db", "desktop", "mobile"], ["z*"]),
+      selectedPlaywrightProjectNames(["node-db", "desktop"], ["z*"]),
     /No projects matched/,
   );
 });

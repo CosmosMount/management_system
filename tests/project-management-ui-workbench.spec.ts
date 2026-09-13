@@ -80,9 +80,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         baseURL,
         javaScriptEnabled: false,
         viewport:
-          testInfo.project.name === "mobile"
-            ? { width: 393, height: 727 }
-            : { width: 1_440, height: 1_000 },
+          ({ width: 1_440, height: 1_000 }),
       });
       try {
         await loginAsTestUser(context, baseURL, {
@@ -311,7 +309,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     );
     await expect(firstHistoryHeader).toContainText("计划 v1");
     await expect(firstHistoryHeader.getByLabel("只读")).toBeVisible();
-    await expect(firstHistoryHeader.getByRole("link")).toHaveCount(0);
+    await expect(firstHistoryHeader.getByRole("link")).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     const firstHistoryRow = page.getByTestId(
       `timeline-row-history-plan:${firstRevision.revisionNodeId}`,
     );
@@ -684,7 +682,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const candidateHeader = page.getByTestId(candidateHeaderTestId);
     const candidateRow = page.getByTestId(candidateRowTestId);
     await expect(currentHeader).toBeVisible();
-    await expect(candidateHeader.getByRole("link")).toHaveCount(0);
+    await expect(candidateHeader.getByRole("link")).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     await expect(candidateHeader).toContainText(
       `计划修订「${revisionReason}」修改后`,
     );
@@ -1175,11 +1173,21 @@ test.describe("project management UI project-management-ui-workbench", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("draft editor timeline header links to the persisted task", async ({ context, page, baseURL }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, { openId: fixture.owner.openId, name: fixture.owner.person.displayName });
+    await page.goto(`/progress/tasks/${fixture.taskId}/edit`);
+    const header = page.getByTestId("time-canvas-row-header-task-composer-plan-row");
+    await expect(header.getByRole("link", { name: fixture.taskTitle, exact: true })).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
+    await expect(header.getByRole("link")).toHaveCount(1);
+    await expectHealthyPage(page);
+  });
+
   test("Task workbench uses the unified Draft editor and locks it after activation", async ({
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       const fixture = await createDraftWorkbenchFixture();
       const addedMember = await createAccountPerson(
         `S6 Unified Editor Member ${randomUUID()}`,
@@ -1246,12 +1254,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(page.getByLabel("任务名称")).toHaveValue(fixture.taskTitle);
       await expect(page.getByText(inactiveCurrentMember.person.displayName)).toBeVisible();
       await expect(page.getByRole("button", { name: "保存任务" }).first()).toBeDisabled();
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -1318,12 +1321,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         })
         .click();
 
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -1348,6 +1346,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .click();
       await page.getByLabel("结束节点名称").fill("S6 Edited Terminal");
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -1490,6 +1489,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         "true",
       );
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
       await expect
         .poll(() =>
@@ -1532,6 +1532,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .getByRole("option", { name: editor.person.displayName, exact: true })
         .click();
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
       await expect
         .poll(() =>
@@ -1716,6 +1717,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
 
       await page.getByLabel("任务名称").fill(updatedTitle);
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -1826,7 +1828,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       context,
       page,
       baseURL,
-    }, testInfo) => {
+    }) => {
       const fixture = await createDraftWorkbenchFixture();
       const outsider = await createAccountPerson("S6 Unified Editor Outsider");
       const searchFillerKey = randomUUID();
@@ -1895,12 +1897,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(page.getByLabel("搜索参与人员", { exact: true })).toHaveCount(0);
       await expect(page.getByText(localOnlyMember.person.displayName)).toHaveCount(0);
       await page.getByLabel("任务名称").fill(participantTitle);
-      if (testInfo.project.name === "mobile") {
-        await page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /S6 Draft 第一阶段/ })
-          .click();
-      } else {
+      {
         await page
           .getByTestId("task-plan-node-navigator")
           .getByRole("button", { name: /S6 Draft 第一阶段/ })
@@ -1908,6 +1905,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }
       await page.getByLabel("目标").fill("S6 Participant 更新计划");
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -2554,6 +2552,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         })
         .click();
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => ({
@@ -2968,7 +2967,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
       },
     });
     expect(completedTermination.confirmedAt).not.toBeNull();
-    await page.locator("summary").filter({ hasText: "任务资料与成员" }).click();
     await expect(
       page.getByText("实际结束", { exact: true }).locator(".."),
     ).toContainText(formatDateTime(completedTermination.confirmedAt));
@@ -3008,7 +3006,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const firstReason = `S6 v2 Revision ${randomUUID()}`;
@@ -3053,7 +3051,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const multiSelection = page.getByTestId(
       "task-composer-anchor-multi-selection",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
       await expect(multiSelection).toContainText("已选 1 个可编辑节点");
       const canvas = page.getByTestId("time-canvas-root");
@@ -3116,12 +3114,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await revisionBatchMoveDialog
         .getByRole("button", { name: "取消" })
         .click();
-    } else {
-      await expect(page.getByTestId("time-canvas-root")).toBeHidden();
-      await expect(multiSelection).toBeHidden();
-      await expect(
-        page.getByRole("button", { name: "批量移动" }),
-      ).toBeHidden();
     }
     const revisionReason = revisionInspector.getByLabel("计划修订名称");
     const revisionDescription = revisionInspector.getByLabel("计划修订详细内容");

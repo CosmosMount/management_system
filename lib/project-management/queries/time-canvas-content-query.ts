@@ -6,10 +6,8 @@ import {
 } from "@/lib/project-management/application/errors";
 import {
   DAY_MS,
-  clampLogicalRangeToThreeYears,
   contentTimeBounds,
   floorShanghaiDay,
-  padShanghaiCalendarRange,
 } from "@/lib/project-management/time-canvas/time-math";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
@@ -40,6 +38,7 @@ import { createRowPageKey } from "@/lib/project-management/queries/time-canvas-c
 import { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
 import { loadTaskAnchors } from "@/lib/project-management/queries/time-canvas-anchor-loader";
 import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
+import { resolveContentNavigationWindow } from "@/lib/project-management/time-canvas/content-window";
 
 export async function getContentDrivenTimeCanvasData({
   actor,
@@ -151,41 +150,9 @@ export async function getContentDrivenTimeCanvasData({
     ...businessTimestamps,
     ...globalMarkers.map((marker) => Date.parse(marker.markedAt)),
   ]);
-  const now = Date.now();
-  const contentNavigationRange = padShanghaiCalendarRange(contentRange, 2, seedStart);
-  const businessNavigationRange = businessContentRange
-    ? padShanghaiCalendarRange(businessContentRange, 2, seedStart)
-    : null;
-  const todayNavigationRange = padShanghaiCalendarRange(null, 2, now);
-  const preferredCenterNavigationRange = includePreferredCenterInFullRange &&
-      requestedCenterMs !== null
-    ? padShanghaiCalendarRange(null, 2, requestedCenterMs)
-    : null;
-  const fullRange = {
-    startMs: Math.min(
-      contentNavigationRange.startMs,
-      todayNavigationRange.startMs,
-      preferredCenterNavigationRange?.startMs ?? Number.POSITIVE_INFINITY,
-    ),
-    endMs: Math.max(
-      contentNavigationRange.endMs,
-      todayNavigationRange.endMs,
-      preferredCenterNavigationRange?.endMs ?? Number.NEGATIVE_INFINITY,
-    ),
-  };
-  const fallbackCenterMs = businessNavigationRange &&
-      now >= businessNavigationRange.startMs &&
-      now < businessNavigationRange.endMs
-    ? now
-    : (businessContentRange?.startMs ??
-      contentRange?.startMs ??
-      (contentNavigationRange.startMs + contentNavigationRange.endMs) / 2);
-  const resolvedCenterMs = requestedCenterMs !== null &&
-      requestedCenterMs >= fullRange.startMs &&
-      requestedCenterMs < fullRange.endMs
-    ? requestedCenterMs
-    : fallbackCenterMs;
-  const logical = clampLogicalRangeToThreeYears(fullRange, resolvedCenterMs);
+  const navigation = resolveContentNavigationWindow({ contentRange, businessContentRange, preferredCenterMs, includePreferredCenterInFullRange });
+  const { fullRange, resolvedCenterMs } = navigation;
+  const logical = { range: navigation.range, clipped: navigation.rangeClipped };
   const rowPageKey = createRowPageKey(
     actor,
     parsed,

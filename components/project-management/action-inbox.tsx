@@ -145,18 +145,10 @@ export function ActionInbox({
       )}
       {items.length > 0 && (
         <List aria-label="待办与审批列表">
-          {(compact ? items.slice(0, 4) : items).map((item) => (
+          {items.map((item) => (
             <ActionInboxRow key={item.id} item={item} compact={compact} />
           ))}
         </List>
-      )}
-      {compact && items.length > 4 && (
-        <details>
-          <summary className="w-fit cursor-pointer rounded text-sm text-primary focus-visible:outline-2 focus-visible:outline-ring">展开其余 {items.length - 4} 项待办</summary>
-          <List aria-label="更多待办预览" className="mt-3">
-            {items.slice(4).map((item) => <ActionInboxRow key={item.id} item={item} compact />)}
-          </List>
-        </details>
       )}
       {compact && inboxPage.totalCount > items.length && <p className="text-xs text-muted-foreground">当前预览 {items.length} / {inboxPage.totalCount} 项，更多事项请查看全部待办。</p>}
       {!compact && loadFailure?.recovery === "RELOAD_QUEUE" && (
@@ -205,27 +197,22 @@ function ActionInboxRow({
     <ListItem data-testid="action-inbox-item">
       <ListContent>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {!compact && <Badge variant="outline">{kindLabels[item.kind]}</Badge>}
-          {(!compact || item.severity === "CRITICAL" || item.severity === "HIGH") && <Badge
+          <Badge variant="outline">{kindLabels[item.kind]}</Badge>
+          <Badge
             variant={item.severity === "CRITICAL" ? "destructive" : "secondary"}
           >
             {severityLabels[item.severity]}
-          </Badge>}
-          <span className={`min-w-0 flex-1 break-words font-medium ${compact ? "line-clamp-2" : ""}`} title={item.title}>
+          </Badge>
+          <span className="min-w-0 flex-1 break-words font-medium" title={item.title}>
             {item.title}
           </span>
         </div>
-        {compact && (item.taskTitle || item.projectName) && <p className="mt-1 truncate text-xs text-muted-foreground" title={item.taskTitle || item.projectName || undefined}>{item.taskTitle || item.projectName}</p>}
         {!compact && (
           <p className="mt-2 break-words text-sm text-muted-foreground">
             {item.summary}
           </p>
         )}
         <NodeDeadline target={item.currentNodeDeadline} className="mt-2" />
-        {compact && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{kindLabels[item.kind]}</span><span>{item.timeLabel}：{formatDateTime(item.relevantAt)}</span></div>}
-        <details open={compact ? undefined : true} className="mt-2 min-w-0">
-          <summary className={compact ? "w-fit cursor-pointer rounded text-xs text-primary focus-visible:outline-2 focus-visible:outline-ring" : "hidden"}>待办详情</summary>
-          {compact && <p className="mt-2 break-words text-sm text-muted-foreground">{item.title} · {item.summary}</p>}
         <div className="mt-2 flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           {item.projectName && (
             <span className="min-w-0 break-words">
@@ -245,7 +232,6 @@ function ActionInboxRow({
             {item.timeLabel}：{formatDateTime(item.relevantAt)}
           </span>
         </div>
-        </details>
       </ListContent>
       <ListActions className="max-sm:w-full">
         <Link

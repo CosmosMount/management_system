@@ -49,7 +49,7 @@ export function PageCommandBar({
     : pathname.endsWith("/edit")
       ? "编辑"
       : pathname.endsWith("/new")
-        ? section?.href === routes.progress.projects ? "提交立项" : "新建任务"
+        ? section?.href === routes.progress.projects ? "提交立项" : section?.href === routes.progress.meetings ? "创建会议" : "新建任务"
         : "详情";
 
   return (

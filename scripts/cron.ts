@@ -16,9 +16,9 @@ import {
   runLockedProjectManagementDaily,
 } from "../lib/project-management/application/cron-service";
 import {
-  runMilestoneDeadlineScan,
   runProjectManagementIntegrityScan,
   runProjectManagementNotificationRetention,
+  runConfiguredProjectManagementReminders,
 } from "../lib/project-management/application/maintenance-service";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
@@ -162,7 +162,7 @@ async function runProjectManagementDailyMaintenance() {
   try {
     const locked = await runLockedProjectManagementDaily(async () => {
       const [deadlines, retention, integrity] = await Promise.all([
-        runMilestoneDeadlineScan(),
+        runConfiguredProjectManagementReminders(),
         runProjectManagementNotificationRetention(),
         runProjectManagementIntegrityScan(),
       ]);

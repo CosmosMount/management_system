@@ -62,7 +62,12 @@ export function ResourcePlannerCanvasView({
 }: ResourcePlannerCanvasViewProps) {
   return (
     <div className="space-y-4" data-testid="resource-planner-workbench">
-      <div className="flex flex-wrap items-center gap-3 px-1">
+      <div className={cn(
+        "flex flex-wrap items-center",
+        timeCanvasProps.mode === "PERSONAL_TIMELINE"
+          ? "gap-2 px-1"
+          : "gap-3 px-1",
+      )}>
         {canCreateSegment && (
           <Button
             type="button"
@@ -75,7 +80,7 @@ export function ResourcePlannerCanvasView({
         )}
         <span className="text-xs text-muted-foreground">
           {readOnly
-            ? "双击投入打开只读详情；此页面不能修改既有投入。"
+            ? ""
             : "双击投入打开详情；总览不会直接修改既有投入。"}
         </span>
       </div>

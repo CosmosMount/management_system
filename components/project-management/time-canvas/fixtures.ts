@@ -1,4 +1,5 @@
 import { DAY_MS, HOUR_MS } from "@/components/project-management/time-canvas/time-math";
+import { routes } from "@/lib/routes";
 import type {
   TimeCanvasMode,
   TimeCanvasModel,
@@ -29,6 +30,31 @@ export function createEmptyTimeCanvasFixture(): TimeCanvasModel {
     anchors: [],
     segments: [],
     generatedAt: new Date(RANGE_START).toISOString(),
+  };
+}
+
+export function createRowHeaderTimeCanvasFixture(): TimeCanvasModel {
+  const project = {
+    id: "00000000-0000-4000-8000-000000000321",
+    name: "超长关联项目名称".repeat(12),
+  };
+  const taskId = "00000000-0000-4000-8000-000000000322";
+  return {
+    ...createEmptyTimeCanvasFixture(),
+    rows: (["TASK", "PLAN"] as const).flatMap((kind) =>
+      [project, null, undefined].map((rowProject, index) => ({
+        id: `header-${kind}-${index}`,
+        sourceId: taskId,
+        kind,
+        label: "超长任务名称".repeat(12),
+        sublabel: null,
+        href: routes.progress.taskDetail(taskId),
+        ...(rowProject === undefined ? {} : { project: rowProject }),
+        editable: false,
+        height: 48,
+        capacity: null,
+      })),
+    ),
   };
 }
 

@@ -184,6 +184,15 @@ enum ProjectManagementNotificationChannel {
   FEISHU
 }
 
+enum ProjectManagementReminderKind {
+  PERSONAL_SUMMARY
+  ADMIN_GLOBAL_SUMMARY
+  MILESTONE_DUE
+  MILESTONE_OVERDUE
+  TASK_ACTIVATION_OVERDUE
+  TASK_APPROVAL_PENDING
+}
+
 enum AuditSource {
   WEB
   CRON
@@ -220,9 +229,14 @@ model Account {
   teamApprovedOrders        PurchaseOrder[]               @relation("PurchaseOrderTeamApprover")
   techGroupApprovedOrders   PurchaseOrder[]               @relation("PurchaseOrderTechGroupApprover")
   notificationPreferences   NotificationPreference[]
+  createdReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingCreatedBy")
+  updatedReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingUpdatedBy")
+  adminGlobalSummaryRuns AdminGlobalSummaryRun[]
+  personalSummaries PersonalSummary[]
   inAppNotifications        InAppNotification[]
   auditEvents               DomainAuditEvent[]            @relation("AuditActorAccount")
   requestedProjects         Project[]                     @relation("ProjectRequester")
+  createdMeetingRecords     MeetingRecord[]
   reviewedProjects          Project[]                     @relation("ProjectReviewer")
   deletedProjects           Project[]                     @relation("ProjectDeletedBy")
   createdProjectMembers     ProjectMember[]               @relation("ProjectMemberCreatedBy")
@@ -267,6 +281,7 @@ model Person {
   workSegments        WorkSegment[]
   auditEvents         DomainAuditEvent[] @relation("AuditActorPerson")
   projectMembers      ProjectMember[]
+  meetingRecordParticipants MeetingRecordParticipant[]
   createdRiskRecords  RiskRecord[]       @relation("RiskRecordCreatedByPerson")
   resolvedRiskRecords RiskRecord[]       @relation("RiskRecordResolvedByPerson")
   authoredComments    Comment[]          @relation("CommentAuthorPerson")
@@ -276,6 +291,34 @@ model Person {
 
   @@index([displayName])
   @@index([status])
+}
+
+model MeetingRecord {
+  id                 String   @id @default(uuid())
+  topic              String   @db.VarChar(200)
+  rangeStart         DateTime @db.Timestamptz(6)
+  rangeEnd           DateTime @db.Timestamptz(6)
+  minutes            String   @default("")
+  timelineDisplay    Json     @default("{\"projectIds\":[],\"taskIds\":[]}")
+  version            Int      @default(0)
+  createdByAccountId String
+  createdBy          Account  @relation(fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  participants       MeetingRecordParticipant[]
+  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([createdAt, id])
+  @@index([createdByAccountId])
+}
+
+model MeetingRecordParticipant {
+  meetingId String
+  personId  String
+  meeting   MeetingRecord @relation(fields: [meetingId], references: [id], onDelete: Restrict)
+  person    Person        @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@id([meetingId, personId])
+  @@index([personId])
 }
 
 model User {
@@ -1052,6 +1095,68 @@ model NotificationPreference {
   updatedAt DateTime                              @updatedAt @db.Timestamptz(6)
 
   @@unique([accountId, category, channel])
+}
+
+model PersonalSummaryRun {
+  id String @id @default(uuid())
+  eventKey String @unique
+  trigger String
+  status String
+  actorAccountId String?
+  startedAt DateTime @default(now()) @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  recipientCount Int @default(0)
+  errorMessage String?
+  summaries PersonalSummary[]
+
+  @@index([startedAt])
+}
+
+model PersonalSummary {
+  id String @id @default(uuid())
+  runId String
+  run PersonalSummaryRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  accountId String
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  markdown String
+  requiresApprovalAdministrator Boolean @default(false)
+
+  @@unique([runId, accountId])
+  @@index([accountId])
+}
+
+model AdminGlobalSummaryRun {
+  id String @id @default(uuid())
+  eventKey String @unique
+  trigger String
+  status String
+  actorAccountId String?
+  actor Account? @relation(fields: [actorAccountId], references: [id], onDelete: SetNull)
+  startedAt DateTime @default(now()) @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  markdown String @default("")
+  recipientCount Int @default(0)
+  errorMessage String?
+
+  @@index([startedAt])
+}
+
+model ProjectManagementReminderSetting {
+  id                String                          @id @default(uuid())
+  kind              ProjectManagementReminderKind
+  timeOfDay         String                          @db.VarChar(5)
+  enabled           Boolean                         @default(true)
+  timezone          String                          @default("Asia/Shanghai") @db.VarChar(64)
+  sortOrder         Int                             @default(0)
+  createdByAccountId String
+  createdBy         Account                         @relation("ReminderSettingCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  updatedByAccountId String
+  updatedBy         Account                         @relation("ReminderSettingUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: Restrict)
+  createdAt         DateTime                        @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                        @updatedAt @db.Timestamptz(6)
+
+  @@unique([kind, timeOfDay])
+  @@index([kind, enabled, timeOfDay])
 }
 
 model InAppNotification {

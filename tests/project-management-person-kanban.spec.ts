@@ -101,7 +101,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     page,
     request,
     baseURL,
-  }, testInfo) => {
+  }) => {
     if (!baseURL) throw new Error("人员看板测试缺少 baseURL");
     const unauthenticated = await request.get(
       new URL("/progress/kanban", baseURL).toString(),
@@ -139,23 +139,12 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     await expect(page.locator('[data-testid^="timeline-row-plan:"]')).toHaveCount(0);
     await expect(page.locator('[data-testid^="segment-block-"]')).toHaveCount(0);
 
-    if (testInfo.project.name === "desktop") {
+    {
       await expect(
         page
           .getByTestId("project-management-sidebar")
           .getByRole("link", { name: "人员时间线", exact: true }),
       ).toHaveAttribute("aria-current", "page");
-    } else {
-      await expect(
-        page.getByTestId("project-management-mobile-bar").getByText("人员时间线"),
-      ).toBeVisible();
-      await page.getByRole("button", { name: "打开项目管理导航" }).click();
-      await expect(
-        page
-          .getByTestId("project-management-drawer")
-          .getByRole("link", { name: "人员时间线", exact: true }),
-      ).toHaveAttribute("aria-current", "page");
-      await page.getByRole("button", { name: "关闭项目管理导航" }).click();
     }
 
     const centerBeforeSelection = new URL(page.url()).searchParams.get("center");
@@ -200,7 +189,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     await expect(
       page.getByText("双击投入打开只读详情；此页面不能修改既有投入。"),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
 
     await expectReadOnlyConfirmableSegment(page, fixture.confirmableSegmentId);

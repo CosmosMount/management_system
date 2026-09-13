@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LayoutList,
   ListChecks,
+  NotebookPen,
 } from "lucide-react";
 import {
   ManagementShell,
@@ -49,6 +50,13 @@ export function projectNavigationItems(
       match: (pathname) =>
         pathname === routes.progress.tasks ||
         pathname.startsWith(`${routes.progress.tasks}/`),
+    },
+    {
+      href: routes.progress.meetings,
+      label: "会议",
+      group: "工作空间",
+      icon: NotebookPen,
+      match: (pathname) => pathname === routes.progress.meetings || pathname.startsWith(`${routes.progress.meetings}/`),
     },
     {
       href: routes.progress.approvals,

@@ -151,7 +151,7 @@ test("Playwright 分类与 AST/spec policy 对不可信写法 fail closed", () =
     writeSpec("wrong-project-skip.spec.ts", NODE_DB_PROJECT_SKIP_SPEC);
     assert.throws(
       () => discoverPlaywrightTestTopology(temporaryRoot),
-      /declares node-db but skips a desktop or mobile project/,
+      /declares node-db but skips a UI project/,
     );
     removeSpec("wrong-project-skip.spec.ts");
 

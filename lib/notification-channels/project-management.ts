@@ -16,6 +16,7 @@ import {
   normalizeProjectManagementNotificationText,
   projectManagementContextLines,
   projectManagementEntityLabel,
+  projectManagementStatusLabel,
 } from "@/lib/project-management/notifications/user-facing-copy";
 import { resolveProjectManagementNotificationLinkPath } from "@/lib/project-management/notifications/link-path";
 import type {
@@ -95,12 +96,12 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
         cancelReason,
       };
     }
-    const openIds = await filterActiveFeishuOpenIds(uniqueOpenIds(payload));
+    const openIds = await eligibleSummaryRecipients(payload, await filterActiveFeishuOpenIds(uniqueOpenIds(payload)));
     return {
       supported: true,
       openIds,
       directOpenIds: openIds,
-      requiresDirectRecipient: payload.purpose === "approval_request",
+      requiresDirectRecipient: payload.purpose === "approval_request" || (payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily"),
     };
   },
   async sendToRecipient(
@@ -108,6 +109,9 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     recipientOpenId,
   ): Promise<NotificationDeliveryTarget> {
     const { payload, botKind } = parseProjectManagementNotification(row);
+    if (!(await eligibleSummaryRecipients(payload, [recipientOpenId])).length) {
+      throw new CanceledNotificationError("收件人已不再具有该总结的接收权限，取消总结投递");
+    }
     if (
       (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
     ) {
@@ -142,7 +146,7 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
   async sendComposite(row) {
     const { payload, botKind } = parseProjectManagementNotification(row);
     const card = buildProjectManagementCard(payload, row.createdAt);
-    const recipients = uniqueOpenIds(payload);
+    const recipients = await eligibleSummaryRecipients(payload, uniqueOpenIds(payload));
     const results = await Promise.allSettled(
       recipients.map((recipientOpenId) =>
         sendFeishuDirectMessage({
@@ -172,6 +176,33 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     }
   },
 };
+
+async function eligibleSummaryRecipients(payload: ProjectManagementNotificationPayload, openIds: string[]) {
+  if (payload.kind === "project_management_personal_summary_daily") {
+    const summary = await prisma.personalSummary.findUnique({
+      where: { id: payload.entityId }, select: { accountId: true, requiresApprovalAdministrator: true },
+    });
+    if (!summary) return [];
+    const identities = await prisma.accountIdentity.findMany({ where: {
+      provider: "FEISHU", tenantId: "default", openId: { in: openIds }, accountId: summary.accountId,
+      account: { person: { is: { status: "ACTIVE" } }, ...(summary.requiresApprovalAdministrator ? { systemRoles: { some: {
+        role: { in: ["SUPER_ADMINISTRATOR" as const, "PROJECT_ADMINISTRATOR" as const] }, team: "", techGroup: "", revokedAt: null,
+      } } } : {}) },
+    }, select: { openId: true } });
+    const allowed = new Set(identities.map((identity) => identity.openId));
+    return openIds.filter((openId) => allowed.has(openId));
+  }
+  if (payload.kind !== "project_management_global_summary_daily") return openIds;
+  const identities = await prisma.accountIdentity.findMany({ where: {
+    provider: "FEISHU", tenantId: "default", openId: { in: openIds }, account: {
+      person: { is: { status: "ACTIVE" } }, systemRoles: { some: {
+        role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] }, team: "", techGroup: "", revokedAt: null,
+      } },
+    },
+  }, select: { openId: true } });
+  const allowed = new Set(identities.map((identity) => identity.openId));
+  return openIds.filter((openId) => allowed.has(openId));
+}
 
 async function staleApprovalCancelReason(
   payload: ProjectManagementNotificationPayload,
@@ -233,7 +264,7 @@ function deliveryTarget(result: FeishuSendResult): NotificationDeliveryTarget {
   };
 }
 
-function buildProjectManagementCard(
+export function buildProjectManagementCard(
   payload: ProjectManagementNotificationPayload,
   createdAt: Date,
 ) {
@@ -275,8 +306,16 @@ function buildProjectManagementCard(
       {
         tag: "div",
         text: {
-          tag: "lark_md",
-          content: [
+          tag: payload.kind === "meeting_work_segment_reminder" || payload.kind === "task_urged" || (payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily") ? "plain_text" : "lark_md",
+          content: payload.kind === "meeting_work_segment_reminder" ? `提醒人：${payload.actorName}\n${payload.summary}\n提醒时间：${formatCardDate(createdAt)}` : (payload.kind === "project_management_global_summary_daily" || payload.kind === "project_management_personal_summary_daily") ? payload.summary : payload.kind === "task_urged" ? [
+            `催促人：${payload.actorName || "未知用户"}`,
+            `项目：${payload.projectName || "未关联项目"}`,
+            `任务：${payload.taskTitle || "任务"}`,
+            `催促时状态：${projectManagementStatusLabel(String(payload.context.taskStatus))}`,
+            `负责人：${Array.isArray(payload.context.ownerNames) && payload.context.ownerNames.length ? payload.context.ownerNames.join("、") : "暂无有效负责人"}`,
+            `催促信息：${summary}`,
+            `催促时间：${formatCardDate(createdAt)}`,
+          ].join("\n") : [
             `**操作人**：${payload.actorName || "系统"}`,
             payload.projectName ? `**项目**：${truncate(payload.projectName, 80)}` : null,
             payload.taskTitle ? `**任务**：${truncate(payload.taskTitle, 80)}` : null,

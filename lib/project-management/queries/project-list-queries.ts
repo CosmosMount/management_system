@@ -29,7 +29,7 @@ export type ProjectListItem = {
   description: string;
   avatarPath: string | null;
   status: ProjectStatus;
-  owners: Array<{ personId: string; displayName: string; avatar: string | null }>;
+  owners: Array<{ personId: string; displayName: string; avatar: string | null; status: "ACTIVE" | "INACTIVE" }>;
   participantCount: number;
   taskCount: number;
   completedTaskCount: number;
@@ -174,5 +174,5 @@ export async function listProjects({
 }
 
 function projectListItem(project: Prisma.ProjectGetPayload<{ include: typeof projectCardInclude }>, counts: ReturnType<typeof summarizeProjectTaskCounts>, tasks: ProjectTaskSummaryItem[]): ProjectListItem {
-  return { id: project.id, name: project.name, description: project.description, avatarPath: project.avatarPath, status: project.status, owners: project.members.map((member) => ({ personId: member.personId, displayName: member.person.displayName, avatar: member.person.avatar })), participantCount: project._count.members, ...counts, tasks, updatedAt: project.updatedAt.toISOString() };
+  return { id: project.id, name: project.name, description: project.description, avatarPath: project.avatarPath, status: project.status, owners: project.members.map((member) => ({ personId: member.personId, displayName: member.person.displayName, avatar: member.person.avatar, status: member.person.status })), participantCount: project._count.members, ...counts, tasks, updatedAt: project.updatedAt.toISOString() };
 }

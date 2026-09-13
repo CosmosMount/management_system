@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { routes } from "@/lib/routes";
 import { getRevisionBasePlan } from "@/app/actions/project-management/plans";
 import {
   ResourcePlannerCanvasClient,
@@ -208,8 +209,9 @@ export function TaskDetailTimeline({
       buildRevisionPlanTimeCanvasOverlay(
         pendingRevisionPlan,
         visibleHistoryPlans,
+        workspace.task,
       ),
-    [pendingRevisionPlan, visibleHistoryPlans],
+    [pendingRevisionPlan, visibleHistoryPlans, workspace.task],
   );
   const revisionHistoryControls = {
     byNodeId: Object.fromEntries(
@@ -325,6 +327,7 @@ type RevisionPlanOverlayEntry = {
 function buildRevisionPlanTimeCanvasOverlay(
   pendingRevisionPlan: ReadyPendingRevisionPlanComparison | null,
   histories: RevisionBasePlanDetails[],
+  task: TaskWorkspace["task"],
 ): TimeCanvasPresentationOverlay | undefined {
   const entries: RevisionPlanOverlayEntry[] = [
     ...(pendingRevisionPlan
@@ -360,8 +363,10 @@ function buildRevisionPlanTimeCanvasOverlay(
     id: entry.rowId,
     sourceId: entry.sourceId,
     kind: "PLAN",
-    label: entry.label,
-    sublabel: entry.sublabel,
+    label: task.title,
+    project: task.project,
+    href: routes.progress.taskDetail(task.id),
+    sublabel: `${entry.label} · ${entry.sublabel}`,
     editable: false,
     height: 112,
     capacity: null,

@@ -1,4 +1,8 @@
-export const FRONTEND_VERSION = "2026.09.11.2";
+const configuredVersion = process.env.NEXT_PUBLIC_FRONTEND_VERSION;
+
+export const FRONTEND_VERSION = configuredVersion && /^\d{4}\.\d{2}\.\d{2}\.\d+$/.test(configuredVersion)
+  ? configuredVersion
+  : "2026.09.12.0";
 export const FRONTEND_VERSION_QUERY = "__frontend_version";
 export const FRONTEND_RELOAD_STORAGE_KEY = "pnx:frontend-reload-at";
 

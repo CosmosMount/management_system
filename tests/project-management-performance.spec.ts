@@ -23,8 +23,8 @@ test.describe("project management S9 scale and performance", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "scale gate runs once on desktop");
+  }) => {
+
     test.setTimeout(8 * 60_000);
     const fixture = await createScaleFixture();
     const actor = fixture.actor;

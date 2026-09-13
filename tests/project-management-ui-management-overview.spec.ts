@@ -4,11 +4,10 @@ import { test, expect } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import { getManagementOverview } from "../lib/project-management/queries/management-overview-queries";
 import { actor, createAccountPerson, createUiFixture } from "./helpers/project-management-ui-fixtures";
-import { assertOfficialPlaywrightEnvironment } from "../scripts/playwright-runner";
 import { loginAsTestUser, expectHealthyPage } from "./helpers/functional-fixtures";
 import { createTask } from "./helpers/project-management-canvas-security-fixtures";
 
-test("management overview counts all readable risks, paginates and preserves read-only access", async ({ context, page, baseURL }) => {
+test("overview query counts readable risks while task plan links and workbench access remain safe", async ({ context, page, baseURL }) => {
   const user = await createAccountPerson(`概览读者 ${randomUUID()}`);
   const taskFixture = await createUiFixture();
   const before = await getManagementOverview(actor(user));
@@ -40,35 +39,6 @@ test("management overview counts all readable risks, paginates and preserves rea
   await loginAsTestUser(context, baseURL, { openId: user.openId, name: user.person.displayName });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/progress?view=management");
-  await expect(page.getByRole("heading", { name: "管理概览", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: `未解决风险记录 ${overview.riskCount}`, exact: true })).toBeVisible();
-  await expect(page.getByTestId("management-overview-summary").getByRole("link")).toHaveCount(4);
-  if (test.info().project.name === "desktop") await page.screenshot({ path: test.info().outputPath("management-overview-desktop.png"), animations: "disabled" });
-  const countingNote = page.getByText("项目、任务与风险为当前可读、未删除对象的全量计数", { exact: false });
-  await expect(countingNote).toBeHidden();
-  await page.getByText("统计口径与查看说明", { exact: true }).click();
-  await expect(countingNote).toBeVisible();
-  await page.getByText("统计口径与查看说明", { exact: true }).click();
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-  await expect(page.getByText("不可展示的删除对象风险", { exact: true })).toHaveCount(0);
-  const firstPageText = await page.locator("#overview-risks").innerText();
-  await page.getByRole("link", { name: "下一页风险" }).click();
-  await expect(page).toHaveURL(/riskCursor=/);
-  const nextPageText = await page.locator("#overview-risks").innerText();
-  expect(risks.filter((risk) => firstPageText.includes(risk.content) || nextPageText.includes(risk.content))).toHaveLength(15);
-  await page.reload();
-  await expect(page.locator("#overview-risks")).toHaveText(nextPageText, { useInnerText: true });
-  await page.locator("#overview-risks").getByRole("link", { name: `项目：${project.name}`, exact: true }).first().click();
-  await expect(page).toHaveURL((url) => url.pathname === `/progress/projects/${project.id}` && url.searchParams.get("section") === "collaboration" && url.hash === "#risks");
-  await expect(page.locator("#risks")).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-  await page.goto(`/progress?view=management&riskCursor=${risks.find((risk) => nextPageText.includes(risk.content))!.id}`);
-  await expect(page.locator("#overview-risks").getByText(taskRisk.content, { exact: true })).toBeVisible();
-  await page.locator("#overview-risks").getByRole("link", { name: `任务：${taskFixture.taskTitle}`, exact: true }).click();
-  await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${taskFixture.taskId}` && url.searchParams.get("section") === "collaboration" && url.hash === "#risks");
-  await expect(page.locator("#risks")).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await page.goto(`/progress/tasks/${taskFixture.taskId}?section=plan`);
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   let previousCenter = new URL(page.url()).searchParams.get("center");
@@ -86,44 +56,20 @@ test("management overview counts all readable risks, paginates and preserves rea
     element.dispatchEvent(new Event("scroll", { bubbles: true }));
   });
   await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${taskFixture.taskId}` && url.searchParams.get("section") === "plan" && url.searchParams.has("center") && url.searchParams.get("center") !== previousCenter);
-  await page.goto(`/progress?view=management&riskCursor=${overview.nextCursor}`);
-  await page.getByRole("link", { name: "返回第一页" }).click();
-  await expect(page).not.toHaveURL(/riskCursor=/);
-  await page.goto("/progress?view=management&riskCursor=invalid");
-  await expect(page.getByRole("status")).toContainText("风险列表已变化");
+  await page.goto("/progress");
   await prisma.person.update({ where: { id: user.person.id }, data: { status: "INACTIVE" } });
   await page.reload();
-  await expect(page.getByRole("heading", { name: "管理概览", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "工作台", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /批准|审批通过|提交/ })).toHaveCount(0);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
+  await page.goto("about:blank");
   await context.clearCookies();
   await page.goto("/progress?view=management");
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("management overview shows a safe retry when its initial query fails", async ({ context, page, baseURL }) => {
-  assertOfficialPlaywrightEnvironment(process.env);
-  const user = await createAccountPerson(`概览错误恢复 ${randomUUID()}`);
-  await loginAsTestUser(context, baseURL, { openId: user.openId, name: user.person.displayName });
-  await prisma.$executeRaw`ALTER TABLE "RiskRecord" RENAME TO "UiOverviewUnavailableRiskRecord"`;
-  try {
-    await page.goto("/progress?view=management");
-    await expect(page.getByRole("alert")).toContainText("管理概览暂时无法加载");
-    await expect(page.getByRole("link", { name: "重新加载管理概览", exact: true })).toBeVisible();
-    await expect(page.locator("body")).not.toContainText("UiOverviewUnavailableRiskRecord");
-    await expect(page.locator("body")).not.toContainText("PrismaClientKnownRequestError");
-    await expectHealthyPage(page);
-  } finally {
-    await prisma.$executeRaw`ALTER TABLE "UiOverviewUnavailableRiskRecord" RENAME TO "RiskRecord"`;
-  }
-  await page.getByRole("link", { name: "重新加载管理概览", exact: true }).click();
-  await expect(page.getByTestId("management-overview-summary")).toBeVisible();
-  await expect(page.getByText("管理概览暂时无法加载", { exact: true })).toHaveCount(0);
-  await expectHealthyPage(page);
-});
-
-test("my work separates the personal schedule and preserves view history", async ({ context, page, baseURL }, testInfo) => {
+test("flat workbench places its timeline before task panels and canonicalizes retired views", async ({ context, page, baseURL }) => {
   const user = await createAccountPerson(`工作台空态 ${randomUUID()}`);
   await loginAsTestUser(context, baseURL, { openId: user.openId, name: user.person.displayName });
   const errors: Error[] = [];
@@ -141,78 +87,96 @@ test("my work separates the personal schedule and preserves view history", async
   await expect(page.getByRole("region", { name: "我的待办", exact: true }).getByText("当前需要推进或审批的事项", { exact: true })).toBeVisible();
   await expectHealthyPage(page);
   await page.screenshot({ path: test.info().outputPath("my-work-empty.png"), animations: "disabled", fullPage: true });
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-  if (testInfo.project.name === "desktop") {
+  const timeline = page.getByRole("region", { name: "我的日程与投入", exact: true });
+  await expect(timeline.getByTestId("time-canvas-root")).toBeVisible();
+  const metricsBox = await metrics.boundingBox();
+  const timelineBox = await timeline.boundingBox();
+  const contentBox = await content.boundingBox();
+  expect(timelineBox!.y).toBeGreaterThanOrEqual(metricsBox!.y + metricsBox!.height);
+  expect(contentBox!.y).toBeGreaterThanOrEqual(timelineBox!.y + timelineBox!.height);
+  const metricColumns = await metrics.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
+  expect(metricColumns).toBe((4));
+  {
     const nextStep = await content.getByRole("heading", { name: "我的待办", exact: true }).boundingBox();
     const myTasks = await content.getByRole("heading", { name: "参与任务", exact: true }).boundingBox();
     expect(Math.abs(nextStep!.y - myTasks!.y)).toBeLessThan(10);
-    expect(myTasks!.y).toBeLessThan(500);
+    expect(myTasks!.x).toBeGreaterThan(nextStep!.x);
+    const inboxBox = await content.getByRole("region", { name: "我的待办", exact: true }).boundingBox();
+    const tasksBox = await content.getByRole("region", { name: "参与任务", exact: true }).boundingBox();
+    expect(tasksBox!.width / inboxBox!.width).toBeCloseTo(0.9, 1);
+    const desktopViewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 768, height: 1000 });
+    await expect.poll(() => metrics.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(2);
+    await expectHealthyPage(page);
+    await page.setViewportSize(desktopViewport);
   }
-  const views = page.getByRole("navigation", { name: "工作台视图" });
-  await views.getByRole("link", { name: "个人日程", exact: true }).click();
-  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule");
-  await expect(views.getByRole("link", { name: "个人日程", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-  await expect(content).toHaveCount(0);
-  await page.getByRole("link", { name: "显示全部", exact: true }).click();
-  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule" && url.searchParams.get("tasks") === "all");
-  await page.reload();
-  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-  await expectHealthyPage(page);
-  await views.getByRole("link", { name: "我的工作", exact: true }).click();
-  await expect(content).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-  await views.getByRole("link", { name: "管理概览" }).click();
-  await expect(page.getByRole("heading", { name: "管理概览", exact: true })).toBeVisible();
-  await page.goBack();
-  await expect(page.getByRole("heading", { name: "工作台", exact: true })).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
+  for (const retiredView of ["schedule", "management"]) {
+    const center = "2026-08-15T00:00:00.000Z";
+    await page.goto(`/progress?view=${retiredView}&riskCursor=invalid&tasks=all&center=${encodeURIComponent(center)}&scale=year`);
+    await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && !url.searchParams.has("riskCursor") && url.searchParams.get("tasks") === "all" && url.searchParams.get("center") === center && url.searchParams.get("scale") === "year");
+    await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "管理概览", exact: true })).toHaveCount(0);
+    await expect(content).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
+    await page.reload();
+    await expect(content).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
+    await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && !url.searchParams.has("riskCursor") && url.searchParams.get("tasks") === "all" && url.searchParams.get("center") === center && url.searchParams.get("scale") === "year");
+    await expectHealthyPage(page);
+  }
   await page.goto("/progress?view=management&focus=invalid");
-  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule" && url.searchParams.get("focusError") === "1" && !url.searchParams.has("focus"));
+  await expect(page).toHaveURL((url) => !url.searchParams.has("view") && url.searchParams.get("focusError") === "1" && !url.searchParams.has("focus"));
   await expect(page.getByRole("status")).toContainText("无法定位该时间对象");
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await page.goto("/progress?view=management&focus=");
-  await expect(views.getByRole("link", { name: "个人日程", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && !url.searchParams.has("focus"));
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
 });
 
-test("participating work stays visible and focus links remain in schedule after closing", async ({ context, page, baseURL }) => {
+test("participating work stays visible and focus links return to the flat workbench after closing", async ({ context, page, baseURL }) => {
   const fixture = await createUiFixture();
   await loginAsTestUser(context, baseURL, { openId: fixture.member.openId, name: fixture.member.person.displayName });
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
   await page.goto("/progress");
   const tasks = page.getByRole("region", { name: "参与任务", exact: true });
-  await expect(tasks.getByRole("link", { name: fixture.taskTitle, exact: true })).toBeVisible();
-  await expect(tasks.getByRole("list", { name: "参与任务预览", exact: true })).toBeVisible();
+  const table = tasks.getByRole("table", { name: "参与任务列表", exact: true });
+  await expect(table.getByRole("link", { name: fixture.taskTitle, exact: true })).toBeVisible();
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("columnheader")).toHaveText(["任务", "状态", "当前节点", "版本"]);
+  await expect(table.locator("tbody tr").and(page.getByTestId(`participating-task-${fixture.taskId}`))).toBeVisible();
   const inbox = page.getByRole("region", { name: "我的待办", exact: true });
   await expect(inbox.getByRole("link", { name: "查看全部", exact: true })).toHaveAttribute("href", "/progress/approvals");
   await expectHealthyPage(page);
   await page.screenshot({ path: test.info().outputPath("my-work.png"), animations: "disabled", fullPage: true });
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-  await expect(tasks.getByRole("link", { name: "查看全部参与任务", exact: true })).toHaveAttribute("href", "/progress/tasks?mine=1&status=ACTIVE");
-  await page.getByRole("link", { name: "显示全部", exact: true }).click();
-  await expect(page).toHaveURL((url) => url.searchParams.get("tasks") === "all" && url.searchParams.get("view") !== "schedule");
-  await expect(tasks.getByRole("link", { name: "查看全部参与任务", exact: true })).toHaveAttribute("href", "/progress/tasks?mine=1&status=");
-  await tasks.getByRole("link", { name: fixture.taskTitle, exact: true }).click();
+  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+  await expect(tasks.getByRole("link", { name: /查看全部参与任务/ })).toHaveCount(0);
+  await tasks.getByRole("link", { name: "显示全部", exact: true }).click();
+  await expect(page).toHaveURL((url) => url.searchParams.get("tasks") === "all" && !url.searchParams.has("view"));
+  await expect(tasks.getByRole("link", { name: /查看全部参与任务/ })).toHaveCount(0);
+  await expect(tasks.getByRole("link", { name: "只看进行中", exact: true })).toBeVisible();
+  await table.getByRole("link", { name: fixture.taskTitle, exact: true }).click();
   await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${fixture.taskId}`);
-  await page.goto(`/progress?view=management&focus=${fixture.confirmableSegmentId}`);
-  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule" && url.searchParams.get("focus") === fixture.confirmableSegmentId);
+  await page.goto(`/progress?view=management&riskCursor=invalid&tasks=all&scale=quarter&focus=${fixture.confirmableSegmentId}`);
+  await expect(page).toHaveURL((url) => url.pathname === "/progress" && !url.searchParams.has("view") && !url.searchParams.has("riskCursor") && url.searchParams.get("tasks") === "all" && url.searchParams.get("scale") === "quarter" && url.searchParams.get("focus") === fixture.confirmableSegmentId);
   const inspector = page.getByTestId("segment-inspector");
   await expect(inspector).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(inspector).toHaveCount(0);
-  await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule" && !url.searchParams.has("focus"));
+  await expect(page).toHaveURL((url) => !url.searchParams.has("view") && !url.searchParams.has("focus"));
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await page.reload();
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+  await expect(page.getByTestId("workbench-priority-content")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
 });
 
-test("dense workbench previews keep secondary items accessible without crowding the first screen", async ({ context, page, baseURL }) => {
+test("dense workbench keeps all participating tasks in a table and retains compact inbox", async ({ context, page, baseURL }) => {
   test.setTimeout(120_000);
   const user = await createAccountPerson(`紧凑工作台 ${randomUUID()}`);
   for (let index = 0; index < 9; index += 1) {
@@ -230,23 +194,42 @@ test("dense workbench previews keep secondary items accessible without crowding 
   await page.goto("/progress");
   const inbox = page.getByTestId("action-inbox");
   await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(8);
-  await expect(inbox.getByRole("link")).toHaveCount(4);
+  await expect(inbox.getByRole("link")).toHaveCount(8);
+  for (const link of await inbox.getByRole("link").all()) {
+    await expect(link).toBeVisible();
+  }
+  await expect(inbox.locator("details, summary")).toHaveCount(0);
+  await expect(inbox.getByText("展开其余 4 项待办", { exact: true })).toHaveCount(0);
   await expect(inbox).toContainText("当前预览 8 / 9 项");
   const tasks = page.getByRole("region", { name: "参与任务", exact: true });
-  await expect(tasks.getByRole("listitem")).toHaveCount(6);
-  await expect(tasks.getByRole("link", { name: "查看全部参与任务（当前预览 6 项）", exact: true })).toBeVisible();
+  const table = tasks.getByRole("table", { name: "参与任务列表", exact: true });
+  await expect(table.locator("tbody tr[data-testid^='participating-task-']")).toHaveCount(9);
+  await expect(table.getByRole("columnheader")).toHaveText(["任务", "状态", "当前节点", "版本"]);
+  await expect(table.locator("tbody tr td:last-child")).toHaveText(Array(9).fill("v1"));
+  await expect(tasks.getByRole("link", { name: /查看全部参与任务/ })).toHaveCount(0);
+  await expect(tasks.getByRole("link", { name: "显示全部", exact: true })).toBeVisible();
+  await expect(tasks).not.toContainText("当前预览");
+  const tableScroll = tasks.getByRole("region", { name: "参与任务表格滚动区域", exact: true });
+  await expect(tableScroll).toHaveAttribute("tabindex", "0");
+  await tableScroll.focus();
+  await expect(tableScroll).toBeFocused();
+  const tableLayout = await table.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+  }));
+  expect(tableLayout.width).toBeGreaterThanOrEqual(42 * tableLayout.rootFontSize);
+  await expect(tableScroll).toHaveCSS("overflow-x", "auto");
+  await tableScroll.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  await expect.poll(() => tableScroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  const firstTaskLink = table.locator("tbody tr").first().getByRole("link");
+  await expect(firstTaskLink).toContainText("很长的任务标题".repeat(24));
+  await expect(firstTaskLink).toHaveCSS("white-space", "normal");
+  await expect(firstTaskLink).not.toHaveCSS("text-overflow", "ellipsis");
   await expectHealthyPage(page);
-  const firstItem = inbox.getByTestId("action-inbox-item").first();
-  await firstItem.locator("summary").focus();
-  await page.keyboard.press("Enter");
-  await expect(firstItem.locator("details")).toHaveAttribute("open", "");
-  await expect(firstItem.getByText("完成标准：查询测试通过", { exact: false })).toBeVisible();
-  await inbox.getByText("展开其余 4 项待办", { exact: true }).click();
-  await expect(inbox.getByRole("link")).toHaveCount(8);
-  await expectHealthyPage(page);
-  await tasks.getByRole("link", { name: "查看全部参与任务（当前预览 6 项）", exact: true }).click();
-  await expect(page).toHaveURL((url) => url.pathname === "/progress/tasks" && url.searchParams.get("mine") === "1" && url.searchParams.get("status") === "ACTIVE");
-  await expect(page.getByRole("region", { name: "任务列表", exact: true }).getByRole("article")).toHaveCount(9);
+  const taskHref = await firstTaskLink.getAttribute("href");
+  expect(taskHref).toMatch(/^\/progress\/tasks\/[^/]+$/);
+  await firstTaskLink.click();
+  await expect(page).toHaveURL((url) => url.pathname === taskHref);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
 });

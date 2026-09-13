@@ -760,8 +760,7 @@ export function analyzePlaywrightSpec(
           }
           if (
             ts.isStringLiteralLike(conditionNode) &&
-            (conditionNode.text === "desktop" ||
-              conditionNode.text === "mobile")
+            conditionNode.text === "desktop"
           ) {
             referencesDeviceProject = true;
           }

@@ -38,6 +38,7 @@ const ACTION_DEFINITIONS = {
   "pm.task.draft_members.replace": ["TASK", "调整了 Task 草稿成员"],
   "pm.task.draft_plan.replace": ["PLAN_NODE", "调整了 Task 草稿计划"],
   "pm.task.activate": ["TASK", "激活了 Task"],
+  "pm.task.urge": ["TASK", "催促了任务"],
   "pm.task.draft.delete": ["TASK", "撤回并删除了 Task 草稿"],
   "pm.task.metadata.update": ["TASK", "修改了 Task 信息"],
   "pm.task.members.replace": ["TASK", "调整了 Task 成员"],

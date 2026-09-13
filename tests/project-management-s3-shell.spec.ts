@@ -11,11 +11,40 @@ import {
 import { createAccountPerson, grantRole } from "./helpers/project-management-ui-fixtures";
 
 test.describe("project management S3 shell", { tag: "@smoke" }, () => {
-  test("desktop sidebar and mobile drawer keep navigation accessible and healthy", async ({
+  test("窄窗口仍使用完整侧栏、导航和时间线", async ({ context, page, baseURL }) => {
+    const fixture = await createShellFixture();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.openId,
+      name: fixture.displayName,
+    });
+    for (const width of [1440, 560]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto("/progress");
+      const sidebar = page.getByTestId("project-management-sidebar");
+      await expect(sidebar).toBeVisible();
+      await expect(sidebar.getByRole("link", { name: "会议", exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "个人中心", exact: true }).first()).toBeVisible();
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      await page.getByRole("button", { name: "折叠项目管理导航" }).click();
+      await expect(sidebar).toHaveCSS("width", "64px");
+      await page.getByRole("button", { name: "展开项目管理导航" }).focus();
+      await page.getByRole("button", { name: "展开项目管理导航" }).press("Enter");
+      await expect(sidebar).toHaveCSS("width", "224px");
+      await sidebar.getByRole("link", { name: "会议", exact: true }).click();
+      await expect(page).toHaveURL(/\/progress\/meetings(?:\?|$)/);
+      await expectHealthyPage(page);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test("shared sidebar keep navigation accessible and healthy", async ({
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     const fixture = await createShellFixture();
     const browserErrors: string[] = [];
     page.on("pageerror", (error) => browserErrors.push(error.message));
@@ -31,7 +60,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     await expect(page.getByRole("heading", { name: "工作台", exact: true })).toBeVisible();
     await expectHealthyPage(page);
 
-    if (testInfo.project.name === "desktop") {
+    {
       const sidebar = page.getByTestId("project-management-sidebar");
       const navigation = page.getByRole("navigation", {
         name: "项目管理导航",
@@ -55,6 +84,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
           "/progress",
           "/progress/projects",
           "/progress/tasks",
+          "/progress/meetings",
           "/progress/approvals",
           "/progress/resources",
           "/progress/kanban",
@@ -79,43 +109,6 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
       await expect(
         navigation.getByRole("link", { name: "任务", exact: true }),
       ).toHaveAttribute("aria-current", "page");
-    } else {
-      await expect(
-        page.getByTestId("project-management-sidebar"),
-      ).toBeHidden();
-      const menuButton = page.getByRole("button", {
-        name: "打开项目管理导航",
-      });
-      await menuButton.focus();
-      await page.keyboard.press("Enter");
-      const drawer = page.getByTestId("project-management-drawer");
-      await expect(drawer).toBeVisible();
-      await expect(
-        drawer.getByRole("heading", { name: "项目管理导航" }),
-      ).toBeVisible();
-      await expect(
-        drawer.getByRole("link", {
-          name: `通知，${fixture.unreadCount} 条未读`,
-        }),
-      ).toBeVisible();
-      await expect(
-        drawer.getByRole("link", { name: "资源冲突" }),
-      ).toHaveCount(0);
-      await expect(
-        page.getByRole("heading", { name: "工作台", exact: true }),
-      ).toHaveCount(0);
-
-      await page.keyboard.press("Escape");
-      await expect(drawer).toBeHidden();
-      await expect(menuButton).toBeFocused();
-
-      await page.keyboard.press("Enter");
-      await drawer.getByRole("link", { name: "任务", exact: true }).click();
-      await expect(page).toHaveURL(/\/progress\/tasks$/);
-      await expect(drawer).toBeHidden();
-      await expect(
-        page.getByTestId("project-management-mobile-bar").getByText("任务", { exact: true }),
-      ).toBeVisible();
     }
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
@@ -124,27 +117,12 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
         .getByTestId("project-management-command-bar")
         .getByRole("heading", { name: fixture.taskTitle, exact: true }),
     ).toBeVisible();
-    if (testInfo.project.name === "desktop") {
+    {
       await expect(
         page
           .getByTestId("project-management-sidebar")
           .getByRole("link", { name: "任务", exact: true }),
       ).toHaveAttribute("aria-current", "page");
-    } else {
-      await expect(
-        page.getByTestId("project-management-mobile-bar").getByText("任务", { exact: true }),
-      ).toBeVisible();
-      await page
-        .getByRole("button", { name: "打开项目管理导航" })
-        .click();
-      await expect(
-        page
-          .getByTestId("project-management-drawer")
-          .getByRole("link", { name: "任务", exact: true }),
-      ).toHaveAttribute("aria-current", "page");
-      await page
-        .getByRole("button", { name: "关闭项目管理导航" })
-        .click();
     }
     await expectHealthyPage(page);
     const commandBar = page.getByTestId("project-management-command-bar");
@@ -197,28 +175,24 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     expect(browserErrors).toEqual([]);
   });
 
-  test("titles below sixty characters expand whenever the viewport clips them", async ({ context, page, baseURL }, testInfo) => {
-    const title = "需要确认接口和安全联锁的任务标题".repeat(3);
-    expect(title.length).toBeLessThanOrEqual(60);
+  test("统一布局中的超长标题仍可展开和收起", async ({ context, page, baseURL }) => {
+    const title = "需要确认接口和安全联锁的任务标题".repeat(10);
     const fixture = await createShellFixture(title);
     await loginAsTestUser(context, baseURL, { openId: fixture.openId, name: fixture.displayName });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     const commandBar = page.getByTestId("project-management-command-bar");
     const heading = commandBar.getByRole("heading", { name: title, exact: true });
-    if (testInfo.project.name === "desktop") {
-      await expect(commandBar.getByRole("button", { name: "展开完整标题" })).toHaveCount(0);
-      await page.setViewportSize({ width: 393, height: 851 });
+    for (const width of [1440, 393]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const expand = commandBar.getByRole("button", { name: "展开完整标题" });
+      await expect(expand).toBeVisible();
+      const clippedHeight = await heading.evaluate((element) => element.getBoundingClientRect().height);
+      await expand.click();
+      await expect.poll(() => heading.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(clippedHeight);
+      await commandBar.getByRole("button", { name: "收起完整标题" }).click();
+      await expect.poll(() => heading.evaluate((element) => element.getBoundingClientRect().height)).toBe(clippedHeight);
+      await expect(expand).toBeFocused();
     }
-    const expand = commandBar.getByRole("button", { name: "展开完整标题" });
-    await expect(expand).toBeVisible();
-    const clippedHeight = await heading.evaluate((element) => element.getBoundingClientRect().height);
-    await expand.click();
-    await expect.poll(() => heading.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(clippedHeight);
-    await commandBar.getByRole("button", { name: "收起完整标题" }).click();
-    await expect.poll(() => heading.evaluate((element) => element.getBoundingClientRect().height)).toBe(clippedHeight);
-    await expect(expand).toBeFocused();
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await expect(expand).toHaveCount(0);
     await expectHealthyPage(page);
   });
 
@@ -270,7 +244,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test("long notification content and compact navigation stay reachable", async ({ context, page, baseURL }, testInfo) => {
+  test("long notification content and compact navigation stay reachable", async ({ context, page, baseURL }) => {
     const user = await createAccountPerson(`长内容用户 ${randomUUID()}`);
     const title = "超长通知标题".repeat(30);
     await prisma.inAppNotification.create({ data: {
@@ -288,16 +262,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     await page.goto("/progress/notifications");
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
     await expectHealthyPage(page);
-    if (testInfo.project.name === "mobile") {
-      await page.setViewportSize({ width: 320, height: 568 });
-      await page.getByRole("button", { name: "打开项目管理导航" }).click();
-      const drawer = page.getByTestId("project-management-drawer");
-      await drawer.getByRole("link", { name: "人员时间线", exact: true }).scrollIntoViewIfNeeded();
-      await expect(drawer.getByRole("link", { name: "人员时间线", exact: true })).toBeVisible();
-      await drawer.getByRole("link", { name: /^通知，/ }).click();
-      await expect(drawer).toBeHidden();
-      await expectHealthyPage(page);
-    }
+
   });
 });
 

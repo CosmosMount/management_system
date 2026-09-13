@@ -54,7 +54,7 @@ async function createListFixture() {
 }
 
 for (const domain of ["project", "task"] as const) {
-  test(`${domain} list keeps query, scope and terminal states across navigation on both viewports`, async ({ context, page, baseURL }, testInfo) => {
+  test(`${domain} list keeps query, scope and terminal states across navigation in the shared frontend`, async ({ context, page, baseURL }, testInfo) => {
     test.setTimeout(120_000);
     const errors: Error[] = [];
     page.on("pageerror", (error) => errors.push(error));
@@ -80,7 +80,7 @@ for (const domain of ["project", "task"] as const) {
     await expect(row).toBeVisible();
     await expect(page.getByTestId(`${domain}-list-item-${otherId}`)).toHaveCount(0);
     await expectHealthyPage(page);
-    if (testInfo.project.name === "desktop") await page.screenshot({ path: testInfo.outputPath(`${domain}-list-desktop.png`), animations: "disabled" });
+    await page.screenshot({ path: testInfo.outputPath(`${domain}-list-desktop.png`), animations: "disabled" });
     if (isProject) {
       await row.getByRole("link").filter({ has: page.getByRole("heading", { name: fixture.name, exact: true }) }).focus();
       await expect(page.getByRole("tooltip")).toContainText(fixture.name);
@@ -93,7 +93,7 @@ for (const domain of ["project", "task"] as const) {
       await expect(row.getByText(`任务描述：${fixture.description}`, { exact: true })).toBeVisible();
     }
     await expectHealthyPage(page);
-    await expect(row).toHaveCSS("grid-template-columns", testInfo.project.name === "desktop" ? (isProject ? /^(?:\S+ ){6}\S+$/ : /^(?:\S+ ){4}\S+$/) : /^\S+$/);
+    await expect(row).toHaveCSS("grid-template-columns", ((isProject ? /^(?:\S+ ){6}\S+$/ : /^(?:\S+ ){4}\S+$/)));
     if (!isProject) await row.locator("summary").click();
 
     await form.getByRole("textbox").fill(fixture.key);
@@ -123,13 +123,7 @@ for (const domain of ["project", "task"] as const) {
     await page.reload();
     await expect(form.getByLabel(`${label}状态`)).toHaveValue("");
     await expect(form.getByRole("textbox")).toHaveValue(fixture.key);
-    if (testInfo.project.name === "mobile") {
-      await page.getByRole("button", { name: "打开项目管理导航", exact: true }).click();
-      const drawer = page.getByTestId("project-management-drawer");
-      await expect(drawer).toBeVisible();
-      await drawer.getByRole("button", { name: "关闭项目管理导航", exact: true }).click();
-      await expect(drawer).toBeHidden();
-    } else {
+    {
       const sidebar = page.getByTestId("project-management-sidebar");
       await sidebar.getByRole("button", { name: "折叠项目管理导航", exact: true }).focus();
       await page.keyboard.press("Enter");

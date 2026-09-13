@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useTransition,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import { useDetailViewActive } from "@/components/project-management/detail-views";
@@ -109,6 +110,8 @@ export function ResourcePlannerCanvasClient({
   persistViewportInUrl = false,
   adaptiveBlockQuery,
   presentationOverlay,
+  toolbarAction,
+  highlightedRange,
 }: {
   initialModel: TimeCanvasModel;
   peopleOptions: PersonOptionDto[];
@@ -130,6 +133,8 @@ export function ResourcePlannerCanvasClient({
   persistViewportInUrl?: boolean;
   adaptiveBlockQuery?: AdaptiveTimeCanvasBlockQuery;
   presentationOverlay?: TimeCanvasPresentationOverlay;
+  toolbarAction?: ReactNode;
+  highlightedRange?: TimeCanvasRange;
 }) {
   const router = useRouter();
   const viewActive = useDetailViewActive();
@@ -242,14 +247,21 @@ export function ResourcePlannerCanvasClient({
   const [presentationCenterMs, setPresentationCenterMs] = useState<number | null>(
     null,
   );
+  const [loadedContentCenterMs, setLoadedContentCenterMs] = useState<number | null>(null);
+  const fullyLoaded = !adaptiveBlockQuery && Boolean(model.fullRange && model.loadedRanges?.some(
+    (range) => range.startMs <= model.fullRange!.startMs && range.endMs >= model.fullRange!.endMs,
+  ));
   const canvasModel = useMemo(
-    () =>
-      applyPresentationOverlay(
-        model,
+    () => {
+      const logical = fullyLoaded && model.fullRange && loadedContentCenterMs !== null
+        ? clampLogicalRangeToThreeYears(model.fullRange, loadedContentCenterMs) : null;
+      return applyPresentationOverlay(
+        logical ? { ...model, range: logical.range, rangeClipped: logical.clipped } : model,
         presentationOverlay,
         presentationCenterMs ?? undefined,
-      ),
-    [model, presentationCenterMs, presentationOverlay],
+      );
+    },
+    [fullyLoaded, loadedContentCenterMs, model, presentationCenterMs, presentationOverlay],
   );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
@@ -1410,7 +1422,13 @@ export function ResourcePlannerCanvasClient({
       setNotice({ kind: "info", message: "已定位到对比计划时间窗口。" });
       return;
     }
-    if (!adaptiveBlockQuery) return;
+    if (!adaptiveBlockQuery) {
+      if (fullyLoaded) {
+        setLoadedContentCenterMs(centerMs);
+        applyViewportCenter(centerMs);
+      }
+      return;
+    }
     setPresentationCenterMs(null);
     const url = new URL(window.location.href);
     url.searchParams.set("center", new Date(centerMs).toISOString());
@@ -1496,11 +1514,11 @@ export function ResourcePlannerCanvasClient({
         mode,
         model: canvasModel,
         initialZoom: currentZoom,
-        initialCenterMs: persistViewportInUrl ? currentCenterMs : initialCenterMs,
+        initialCenterMs: persistViewportInUrl || fullyLoaded ? currentCenterMs : initialCenterMs,
         initialCenterRevision: currentCenterRevision,
         initialSelection: canvasInitialSelection,
         focusRequest: canvasFocusRequest,
-        display: { showBusy: true, showInspector: false },
+        display: { showBusy: true, showInspector: readOnly && selection?.kind === "ANCHOR" },
         interaction: {
           enableBrushCreate: !isPending && !createDraft && canCreateSegment,
           creationRange: createDraft
@@ -1585,10 +1603,12 @@ export function ResourcePlannerCanvasClient({
           }
         },
         navigationRange: canvasModel.fullRange,
-        onRequestCenter: adaptiveBlockQuery || presentationOverlay
+        onRequestCenter: adaptiveBlockQuery || presentationOverlay || fullyLoaded
           ? requestContentCenter
           : undefined,
         emptyMessage: "当前筛选和时间范围内没有可见安排。",
+        toolbarAction,
+        highlightedRange,
       }}
       segmentDialog={{
         open: Boolean(openSegmentId),

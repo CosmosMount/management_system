@@ -8,7 +8,7 @@ import {
 import { prisma } from "../lib/prisma";
 
 test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
-  test("默认进入看板且桌面侧栏和移动抽屉均可用", async ({
+  test("默认进入看板且统一侧栏可用", async ({
     context,
     page,
     baseURL,
@@ -60,7 +60,7 @@ test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
       await expect(page.getByRole("main")).toHaveCount(1);
       await expectHealthyPage(page);
 
-      if (testInfo.project.name === "desktop") {
+      {
         const sidebar = page.getByTestId("procurement-sidebar");
         const navigation = page.getByRole("navigation", {
           name: "采购管理导航",
@@ -100,33 +100,6 @@ test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
         await expect(
           navigation.getByRole("link", { name: "待办与最近" }),
         ).toHaveAttribute("aria-current", "page");
-      } else {
-        await expect(page.getByTestId("procurement-sidebar")).toBeHidden();
-        const menuButton = page.getByRole("button", {
-          name: "打开采购管理导航",
-        });
-        await menuButton.focus();
-        await page.keyboard.press("Enter");
-        const drawer = page.getByTestId("procurement-drawer");
-        await expect(drawer).toBeVisible();
-        await expect(
-          drawer.getByRole("heading", { name: "采购管理导航" }),
-        ).toBeVisible();
-        await expect(
-          drawer.getByRole("link", { name: "工坊加工费" }),
-        ).toHaveCount(0);
-
-        await page.keyboard.press("Escape");
-        await expect(drawer).toBeHidden();
-        await expect(menuButton).toBeFocused();
-
-        await page.keyboard.press("Enter");
-        await drawer.getByRole("link", { name: "待办与最近" }).click();
-        await expect(page).toHaveURL(/\/procurement\/pending$/);
-        await expect(drawer).toBeHidden();
-        await expect(
-          page.getByTestId("procurement-mobile-bar").getByText("待办与最近"),
-        ).toBeVisible();
       }
 
       for (const panel of [
@@ -181,16 +154,12 @@ test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
         ),
       ).toBe(true);
 
-      if (testInfo.project.name === "desktop") {
+      {
         await expect(
           page
             .getByTestId("procurement-sidebar")
             .getByRole("link", { name: "订单列表" }),
         ).toHaveAttribute("aria-current", "page");
-      } else {
-        await expect(
-          page.getByTestId("procurement-mobile-bar").getByText("订单列表"),
-        ).toBeVisible();
       }
 
       await page.goto(`/procurement/${order.id}/edit`, {

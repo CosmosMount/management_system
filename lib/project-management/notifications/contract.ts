@@ -7,12 +7,17 @@ export const PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION = 1;
 export const RETIRED_SEGMENT_NOTIFICATION_KIND = "segment_confirmation_due";
 export const RETIRED_SEGMENT_NOTIFICATION_REASON = "投入确认功能已退役，取消历史提醒";
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
+  "project_management_global_summary_daily",
+  "project_management_personal_summary_daily",
   "task_assigned",
   "task_updated",
+  "task_urged",
   "task_activated",
   "task_deleted",
   "milestone_due",
   "milestone_overdue",
+  "task_activation_overdue",
+  "task_approval_pending_daily",
   "milestone_review_submitted",
   "milestone_review_result",
   "termination_review_submitted",
@@ -35,6 +40,7 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "risk_created",
   "risk_resolved",
   "comment_created",
+  "meeting_work_segment_reminder",
 ] as const;
 
 const PROJECT_MANAGEMENT_APPROVAL_REQUEST_KINDS = [

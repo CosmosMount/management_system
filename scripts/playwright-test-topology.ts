@@ -94,7 +94,7 @@ export function discoverPlaywrightTestTopology(
     }
     if (kind === "node-db" && analysis.usesDeviceProjectSkip) {
       throw new Error(
-        `${relativePath} declares node-db but skips a desktop or mobile project`,
+        `${relativePath} declares node-db but skips a UI project`,
       );
     }
     topology[kind === "ui" ? "ui" : "nodeDb"].push(relativePath);

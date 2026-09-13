@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { Tooltip } from "@base-ui/react/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { TextTooltip } from "@/components/ui/text-tooltip";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
+import { OwnerAvatarGroup } from "@/components/project-management/owner-avatar-group";
 import { ProjectTaskOverview } from "@/components/project-management/project-task-overview";
 import { useProgressNow } from "@/components/project-management/progress-clock";
 import { getProjectTaskOverview } from "@/lib/project-management/project-task-summary";
@@ -21,7 +21,7 @@ const statusClasses = {
   ACTIVE: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200",
   COMPLETED: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
 };
-const columns = "xl:grid-cols-[minmax(12rem,1.1fr)_minmax(0,2.4fr)_minmax(10rem,1.1fr)_5.5rem_6.5rem_6rem_4rem]";
+const columns = "grid-cols-[minmax(12rem,1.1fr)_minmax(0,2.4fr)_minmax(10rem,1.1fr)_5.5rem_6.5rem_6rem_4rem]";
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai" });
 const relativeFormatter = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
 const avatarClasses = [
@@ -37,13 +37,13 @@ export function ProjectList({ projects }: { projects: ProjectListItem[] }) {
   const nowMs = useProgressNow() ?? Number.NaN;
   if (!projects.length) return <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">没有符合条件的项目</div>;
   return <Tooltip.Provider>
-    <section aria-label="项目列表" className="min-w-0 rounded-xl border bg-card">
-      <div aria-hidden="true" className={cn("hidden items-center gap-3 rounded-t-xl border-b bg-muted/25 px-4 py-4 text-sm font-medium text-muted-foreground xl:grid", columns)}>
+    <section aria-label="项目列表" className="min-w-0 overflow-x-auto rounded-xl border bg-card">
+      <div aria-hidden="true" className={cn("grid items-center gap-3 rounded-t-xl border-b bg-muted/25 px-4 py-4 text-sm font-medium text-muted-foreground", columns)}>
         <span>项目</span><span>任务概览</span><span>汇总</span><span>项目状态</span><span>负责人</span><span>更新时间</span><span>操作</span>
       </div>
       {projects.map((project) => {
         const overview = getProjectTaskOverview(project.tasks, nowMs);
-        return <article key={project.id} data-testid={`project-list-item-${project.id}`} className={cn("grid min-w-0 gap-4 border-b px-4 py-4 text-sm hover:bg-muted/10 xl:min-h-32 xl:items-center xl:gap-3", columns)}>
+        return <article key={project.id} data-testid={`project-list-item-${project.id}`} className={cn("grid min-w-0 gap-3 border-b px-4 py-4 text-sm hover:bg-muted/10 min-h-32 items-center", columns)}>
           <TextTooltip text={`${project.name}：${project.description || "暂无项目简介"}`}>
             <Link href={routes.progress.projectDetail(project.id)} className="flex min-w-0 items-center gap-3 rounded-lg focus-visible:outline-2 focus-visible:outline-ring">
               <ProjectAvatar name={project.name} avatarPath={project.avatarPath} className={cn("size-12", !project.avatarPath && avatarClasses[Array.from(project.id).reduce((total, character) => total + character.charCodeAt(0), 0) % avatarClasses.length])} />
@@ -55,10 +55,9 @@ export function ProjectList({ projects }: { projects: ProjectListItem[] }) {
           </TextTooltip>
           <ProjectTaskOverview tasks={overview.tasks} projectName={project.name} nowMs={nowMs} />
           <ProjectTaskSummary project={project} overdueCount={overview.overdueCount} dueSoonCount={overview.dueSoonCount} />
-          <div className="min-w-0"><span className="mr-2 text-xs text-muted-foreground xl:hidden">项目状态</span><Badge className={cn("h-auto whitespace-normal border-0 px-2.5 py-1 text-sm", statusClasses[project.status])}>{labels[project.status]}</Badge></div>
-          <ProjectOwners owners={project.owners} />
+          <div className="min-w-0"><Badge className={cn("h-auto whitespace-normal border-0 px-2.5 py-1 text-sm", statusClasses[project.status])}>{labels[project.status]}</Badge></div>
+          <OwnerAvatarGroup owners={project.owners} label="项目负责人" />
           <div className="text-sm tabular-nums">
-            <span className="mr-2 text-muted-foreground xl:hidden">更新时间</span>
             <time dateTime={project.updatedAt}>{dateFormatter.format(new Date(project.updatedAt))}</time>
             <p className="mt-1 text-muted-foreground">{relativeUpdatedAt(project.updatedAt, nowMs)}</p>
           </div>
@@ -92,18 +91,6 @@ function ProjectTaskSummary({ project, overdueCount, dueSoonCount }: { project: 
       {dueSoonCount > 0 && <span className="text-amber-800 dark:text-amber-200">即将到期 {dueSoonCount}</span>}
     </p>}
   </div>;
-}
-
-function ProjectOwners({ owners }: { owners: ProjectListItem["owners"] }) {
-  if (!owners.length) return <p className="text-xs text-muted-foreground">负责人未设置</p>;
-  const owner = owners[0];
-  return <TextTooltip text={`项目负责人：${owners.map((entry) => entry.displayName).join("、")}`}>
-    <span tabIndex={0} aria-label={`项目负责人：${owners.map((entry) => entry.displayName).join("、")}`} className="flex min-w-0 items-center gap-2 rounded text-sm focus-visible:outline-2 focus-visible:outline-ring">
-      {owner.avatar ? <Image src={owner.avatar} alt="" width={32} height={32} unoptimized className="size-8 shrink-0 rounded-full object-cover" /> : <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-medium text-primary">{Array.from(owner.displayName)[0] || "?"}</span>}
-      <span className="truncate">{owner.displayName}</span>
-      {owners.length > 1 && <span className="shrink-0 text-muted-foreground">+{owners.length - 1}</span>}
-    </span>
-  </TextTooltip>;
 }
 
 function LegendDot({ label, className }: { label: string; className: string }) {

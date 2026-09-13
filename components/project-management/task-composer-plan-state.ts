@@ -543,6 +543,36 @@ export function composerBatchMoveEntityIds(
   );
 }
 
+export function composerBatchDelayEntityIds(
+  state: TaskComposerSeed,
+  entityId: string,
+) {
+  return composerBatchMoveEntityIds(state, {
+    mode: "FOLLOWING",
+    referenceEntityId: entityId,
+  });
+}
+
+export function applyComposerBatchDelay(
+  state: TaskComposerSeed,
+  entityId: string,
+  targetAt: string,
+): ComposerPlanTimeMutationResult {
+  const currentAt = renderAtMs(state, entityId);
+  const targetMs = localMs(targetAt);
+  const deltaMs = targetMs - currentAt;
+  const days = deltaMs / DAY_MS;
+  if (!Number.isSafeInteger(days) || days <= 0) {
+    return { ok: false, message: "目标时间必须是当前节点之后的整天。" };
+  }
+  return applyComposerBatchMove(state, {
+    mode: "FOLLOWING",
+    referenceEntityId: entityId,
+    direction: "LATER",
+    days,
+  });
+}
+
 export function resolveAnchorGroupMoveCandidate(
   state: TaskComposerSeed,
   request: TimeCanvasAnchorMoveRequest,

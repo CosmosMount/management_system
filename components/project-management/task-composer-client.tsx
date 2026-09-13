@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { activateTask } from "@/app/actions/project-management/tasks";
 import {
   ArrowLeft,
   Redo2,
@@ -60,7 +61,7 @@ import {
 import {
   NO_LEGAL_ANCHOR_MOVE_MESSAGE,
   applyAnchorGroupMove,
-  applyComposerBatchMove,
+  applyComposerBatchDelay,
   applyLiveInspectorUpdate,
   inspectorDraftForEntity,
   isLockedRevisionMilestone,
@@ -73,7 +74,6 @@ import {
   revisionAnchorTimes,
   resolveAnchorGroupMoveCandidate,
   sortMilestones,
-  type ComposerBatchMoveInput,
 } from "@/components/project-management/task-composer-plan-state";
 import {
   actionErrorMessage,
@@ -142,6 +142,13 @@ export function TaskComposerClient({
   const [statusMessage, setStatusMessage] = useState("");
   const [storageBusy, setStorageBusy] = useState(false);
   const [cleanDraftCleanupError, setCleanDraftCleanupError] = useState(false);
+  const [activationPrompt, setActivationPrompt] = useState<{
+    taskId: string;
+    lockVersion: number;
+    destination: string;
+  } | null>(null);
+  const [activationBusy, setActivationBusy] = useState(false);
+  const activationPendingRef = useRef(false);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
   const [optionError, setOptionError] = useState("");
   const cleanDraftCleanupPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -257,7 +264,7 @@ export function TaskComposerClient({
     state,
     storageBusy,
     storageKey,
-    submitting,
+    submitting: submitting || activationPrompt !== null,
   });
 
   const {
@@ -316,11 +323,11 @@ export function TaskComposerClient({
 
   const beginMilestone = (at: string, source?: TaskComposerMilestone) => {
     if (state.milestones.length >= 200) {
-      setServerError("单个计划最多 200 个里程碑。");
+      setServerError("单个计划最多 200 个 Milestone。");
       return;
     }
     if (!isMilestoneTimeAvailable(state, at)) {
-      setServerError("当前没有可用的分钟级里程碑位置，请先调整相邻节点或结束节点。");
+      setServerError("当前没有可用的分钟级 Milestone 位置，请先调整相邻节点或 Terminal。");
       return;
     }
     const milestone: TaskComposerMilestone = {
@@ -357,12 +364,12 @@ export function TaskComposerClient({
   const removeMilestones = (ids: string[]) => {
     const lockedIds = ids.filter((id) => isLockedRevisionMilestone(state, id));
     if (lockedIds.length > 0) {
-      setServerError("已完成并承接到候选计划的里程碑不能删除。");
+      setServerError("已完成并承接到候选计划的 Milestone 不能删除。");
       return;
     }
     const existingIds = ids.filter((id) => state.milestones.some((item) => item.id === id));
     if (existingIds.length === 0) return;
-    if (!window.confirm(`确认删除选中的 ${existingIds.length} 个里程碑？`)) return;
+    if (!window.confirm(`确认删除选中的 ${existingIds.length} 个 Milestone？`)) return;
     endLiveEdit();
     commit((current) => {
       const remaining = current.milestones.filter((item) => !existingIds.includes(item.id));
@@ -438,19 +445,18 @@ export function TaskComposerClient({
     };
   };
 
-  const batchMove = (input: ComposerBatchMoveInput) => {
-    const result = applyComposerBatchMove(state, input);
+  const batchDelay = (entityId: string, targetAt: string) => {
+    const result = applyComposerBatchDelay(state, entityId, targetAt);
     if (!result.ok) return result;
     endLiveEdit();
     commit(() => result.state);
     clearServerIssueKeys(
-      result.movedEntityIds.map((movedEntityId) =>
+        result.movedEntityIds.map((movedEntityId: string) =>
         anchorIssueKey(state, movedEntityId),
       ),
     );
-    setServerError("");
     setStatusMessage(
-      `已将${input.mode === "FOLLOWING" ? "当前及后续" : "所选"} ${result.movedEntityIds.length} 个可编辑节点整体${input.direction === "EARLIER" ? "前移" : "后移"} ${input.days} 天。`,
+      `已将当前及之后的 ${result.movedEntityIds.length} 个可编辑节点整体推迟。`,
     );
     return result;
   };
@@ -463,7 +469,7 @@ export function TaskComposerClient({
       ...revisionAnchorTimes(state),
     );
     if (!Number.isFinite(at) || at <= boundary) {
-      setServerError("结束节点必须严格晚于开始节点和全部里程碑。");
+      setServerError("Terminal 必须严格晚于 Start 和全部 Milestone。");
       return;
     }
     endLiveEdit();
@@ -493,7 +499,7 @@ export function TaskComposerClient({
     if (issue.entityId) {
       selectEntity(issue.entityId);
     }
-    window.setTimeout(() => revealComposerTarget(issue.key), 0);
+    window.setTimeout(() => document.getElementById(issue.key)?.focus(), 0);
   };
 
   const runValidation = () => {
@@ -502,12 +508,12 @@ export function TaskComposerClient({
     setStatusMessage(
       validationIssues.length === 0
         ? isEditingDraft
-          ? "内容校验通过，可以保存任务。"
+          ? "内容校验通过，可以保存 Task。"
           : isResubmittingRevision
             ? "候选计划校验通过，可以修改并重新送审。"
             : isRevisionComposer
               ? "候选计划校验通过，可以创建并送审。"
-              : "计划校验通过，可以创建任务草稿。"
+              : "计划校验通过，可以创建 Task 草稿。"
         : `发现 ${validationIssues.length} 个问题。`,
     );
     return validationIssues.length === 0;
@@ -579,18 +585,18 @@ export function TaskComposerClient({
   ]);
 
   const submit = async () => {
-    if (submitting || (isEditingDraft && !dirty) || !runValidation()) return;
+    if (submitting || activationPrompt || (isEditingDraft && !dirty) || !runValidation()) return;
     cancelPendingAutoSave();
     setSubmitting(true);
     setServerError("");
     setStatusMessage(
       isEditingDraft
-        ? "正在保存任务…"
+        ? "正在保存 Task…"
         : isResubmittingRevision
           ? "正在修改并重新送审…"
           : isRevisionComposer
-            ? "正在创建计划修订并送审…"
-            : "正在创建任务草稿…",
+            ? "正在创建 Revision 并送审…"
+            : "正在创建 Task 草稿…",
     );
     try {
       const result = await submitTaskComposer({
@@ -613,8 +619,8 @@ export function TaskComposerClient({
             raw: JSON.stringify(result.conflictDraft),
             reason:
               mode.kind === "EDIT_DRAFT"
-                ? "任务已在服务端更新，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。"
-                : "任务或计划修订候选计划已在服务端变化，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
+                ? "Task 已在服务端更新，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。"
+                : "Task 或 Revision 候选计划已在服务端变化，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
           });
           setStatusMessage("保存冲突，本地修改已保留；不会自动刷新或合并字段。");
           return;
@@ -637,14 +643,23 @@ export function TaskComposerClient({
       }
       setStatusMessage(
         isEditingDraft
-          ? "任务已保存，正在返回工作台…"
+          ? "Task 已保存，正在返回工作台…"
           : isResubmittingRevision
-            ? "计划修订已修改并重新送审，正在返回工作台…"
+            ? "Revision 已修改并重新送审，正在返回工作台…"
             : isRevisionComposer
-              ? "计划修订已创建并送审，正在返回工作台…"
-              : "任务草稿已创建，正在进入工作台…",
+              ? "Revision 已创建并送审，正在返回工作台…"
+              : "Task 草稿已创建，正在进入工作台…",
       );
-      replaceAfterCollapsingHistoryGuard(result.destination);
+      if (isEditingDraft && result.taskId && result.lockVersion !== undefined) {
+        setStatusMessage("任务已保存，请选择是否立即激活。");
+        setActivationPrompt({
+          taskId: result.taskId,
+          lockVersion: result.lockVersion,
+          destination: result.destination,
+        });
+      } else {
+        replaceAfterCollapsingHistoryGuard(result.destination);
+      }
     } catch {
       setServerError("网络或服务暂时不可用，请稍后重试。草稿不会被清除。");
       setStatusMessage(
@@ -658,6 +673,34 @@ export function TaskComposerClient({
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const continueAfterActivationPrompt = () => {
+    if (!activationPrompt || activationPendingRef.current) return;
+    replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+  };
+
+  const activateAfterSave = async () => {
+    if (!activationPrompt || activationPendingRef.current) return;
+    activationPendingRef.current = true;
+    setActivationBusy(true);
+    setServerError("");
+    try {
+      const result = await activateTask({
+        taskId: activationPrompt.taskId,
+        expectedLockVersion: activationPrompt.lockVersion,
+      });
+      if (!result.ok) {
+        setServerError(result.error.message);
+        return;
+      }
+      replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+    } catch {
+      setServerError("激活结果暂时无法确认，请返回任务详情查看最新状态。");
+    } finally {
+      activationPendingRef.current = false;
+      setActivationBusy(false);
     }
   };
 
@@ -705,8 +748,8 @@ export function TaskComposerClient({
             >
               <ArrowLeft aria-hidden="true" />
               {mode.kind === "CREATE"
-                ? "全部任务"
-                : "返回任务工作台"}
+                ? "全部 Task"
+                : "返回 Task 工作台"}
             </Button>
             <span className="text-sm text-muted-foreground" aria-live="polite">
               {savedAt
@@ -754,27 +797,41 @@ export function TaskComposerClient({
                       ? "正在创建并送审…"
                   : "正在创建…"
                 : isEditingDraft
-                  ? "保存任务"
+                  ? "保存 Task"
                   : isResubmittingRevision
                     ? "修改并重新送审"
                     : isRevisionComposer
                       ? "创建并送审"
-                  : "创建任务草稿"}
+                  : "创建 Task 草稿"}
             </Button>
           </div>
         </div>
-        <nav aria-label="任务表单分区" className="mx-auto mt-2 flex max-w-[110rem] flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-basics", "start")}>
-            1. 基本资料
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-plan", "start")}>
-            2. 计划节点
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-review", "start")}>
-            {isRevisionComposer ? "3. 检查送审" : "3. 检查保存"}
-          </Button>
-        </nav>
       </div>
+
+      <Dialog
+        open={activationPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) continueAfterActivationPrompt();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>任务已保存</DialogTitle>
+            <DialogDescription>
+              是否立即激活任务？激活后任务将进入执行阶段，计划内容只能通过计划修订修改。
+            </DialogDescription>
+          </DialogHeader>
+          {serverError && <p role="alert" className="text-sm text-destructive">{serverError}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={activationBusy} onClick={continueAfterActivationPrompt}>
+              暂不激活
+            </Button>
+            <Button type="button" disabled={activationBusy} onClick={() => void activateAfterSave()}>
+              {activationBusy ? "正在激活…" : "立即激活"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {recovery?.kind === "VALID" && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-6 lg:px-8">
@@ -894,19 +951,12 @@ export function TaskComposerClient({
       )}
 
       <div className="mx-auto flex w-full min-w-0 max-w-[110rem] flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
-        <details id="task-composer-basics" open={!isRevisionComposer} className="scroll-mt-40 rounded-xl border border-border bg-card" tabIndex={-1}>
-          <summary className="cursor-pointer rounded-xl p-4 font-semibold focus-visible:outline-2 focus-visible:outline-ring sm:px-5">
-            1. 基本资料
-            <span className="ml-3 text-sm font-normal text-muted-foreground">
-              {isRevisionComposer ? "沿用当前任务资料（只读）" : "名称、分类与成员"}
-            </span>
-          </summary>
         <aside
-          className="grid min-w-0 gap-5 p-4 pt-0 sm:p-5 sm:pt-0 lg:grid-cols-2 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
-          aria-label="任务基本信息"
+          className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
+          aria-label="Task 基本信息"
         >
           <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "description", "priority"])}>
-            <Field label="任务名称" required htmlFor="title">
+            <Field label="Task 名称" required htmlFor="title">
               <Input
                 id="title"
                 value={state.title}
@@ -918,13 +968,6 @@ export function TaskComposerClient({
               />
               <FieldError id="title-error" messages={issueMessages("title")} className="mt-1.5" />
             </Field>
-            <details className="rounded-lg border border-border p-3">
-              <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                补充说明与优先级
-                <span className="ml-2 text-xs text-muted-foreground">{taskPriorityLabels[state.priority]}优先级{state.description ? " · 已填写描述" : ""}</span>
-                {countIssues(issues, ["description", "priority"]) > 0 && <Badge variant="destructive" className="ml-2">需修正</Badge>}
-              </summary>
-              <div className="mt-3 space-y-3">
             <Field label="描述" htmlFor="description">
               <Textarea
                 id="description"
@@ -958,8 +1001,6 @@ export function TaskComposerClient({
               </select>
               <FieldError id="priority-error" messages={issueMessages("priority")} className="mt-1.5" />
             </Field>
-              </div>
-            </details>
           </ComposerSection>
 
           <ComposerSection
@@ -1004,17 +1045,10 @@ export function TaskComposerClient({
                 <FieldError id="tech-group-error" messages={issueMessages("techGroup")} className="mt-1.5" />
               </Field>
             </div>
-            <details className="rounded-lg border border-border p-3">
-              <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                关联任务与项目（可选）
-                {(state.relatedTaskId || state.projectId) && <Badge variant="secondary" className="ml-2">已设置</Badge>}
-                {countIssues(issues, ["related-task", "task-project"]) > 0 && <Badge variant="destructive" className="ml-2">需修正</Badge>}
-              </summary>
-              <div className="mt-3 space-y-3">
-            <Field label="关联任务" htmlFor="related-task">
+            <Field label="关联 Task" htmlFor="related-task">
               <TaskSelect
                 inputId="related-task"
-                ariaLabel="关联任务"
+                ariaLabel="关联 Task"
                 value={state.relatedTaskId}
                 onValueChange={(nextValue) => updateField("relatedTaskId", nextValue)}
                 initialOptions={initialTasks}
@@ -1027,7 +1061,7 @@ export function TaskComposerClient({
               />
               <FieldError id="related-task-error" messages={issueMessages("related-task")} className="mt-1.5" />
             </Field>
-            <Field label="所属项目" htmlFor="task-project">
+            <Field label="所属 Project" htmlFor="task-project">
               <ProjectSelect
                 inputId="task-project"
                 value={state.projectId ?? null}
@@ -1039,8 +1073,6 @@ export function TaskComposerClient({
               />
               <FieldError id="task-project-error" messages={issueMessages("task-project")} className="mt-1.5" />
             </Field>
-              </div>
-            </details>
           </ComposerSection>
 
           <ComposerSection title="成员" issueCount={countIssues(issues, ["members"])}>
@@ -1070,25 +1102,21 @@ export function TaskComposerClient({
             {!canManageMembers ? (
               <p className="text-xs text-muted-foreground">
                 {isRevisionComposer
-                  ? "计划修订只调整下方计划节点；任务基本信息、分类与成员保持只读。"
-                  : "你可以编辑任务内容和计划，成员与角色为只读。"}
+                  ? "Revision 只调整下方计划节点；Task 基本信息、分类与成员保持只读。"
+                  : "你可以编辑 Task 内容和计划，成员与角色为只读。"}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                草稿阶段可暂不设置成员；激活任务前至少需要一名有效负责人。
+                草稿阶段可暂不设置成员；激活 Task 前至少需要一名有效负责人。
               </p>
             )}
           </ComposerSection>
         </aside>
-        </details>
 
-        <section id="task-composer-plan" aria-labelledby="task-composer-plan-title" tabIndex={-1} className="min-w-0 scroll-mt-40 space-y-3">
-          <div>
-            <h2 id="task-composer-plan-title" className="font-semibold">2. 计划节点</h2>
-            <p className="mt-1 text-sm text-muted-foreground">先选择节点，再填写右侧内容；时间画布与批量调整按需展开。</p>
-          </div>
         <TaskComposerPlanEditor
           state={state}
+          taskId={mode.kind === "CREATE" ? undefined : mode.taskId}
+          initialProject={initialProjects.find((project) => project.id === state.projectId)}
           globalMarkers={initialGlobalMarkers}
           issues={issues}
           inspectorDraft={inspectorDraft}
@@ -1103,58 +1131,17 @@ export function TaskComposerClient({
           }
           optionLoading={false}
           submitting={submitting}
-          submitDisabled={isEditingDraft && !dirty}
-          submitLabel={
-            isEditingDraft
-              ? "保存任务"
-              : isResubmittingRevision
-                ? "修改并重新送审"
-                : isRevisionComposer
-                  ? "创建并送审"
-                  : "创建草稿"
-          }
-          submittingLabel={
-            isEditingDraft
-              ? "正在保存…"
-              : isResubmittingRevision
-                ? "正在重新送审…"
-                : isRevisionComposer
-                  ? "正在创建并送审…"
-                  : "正在创建…"
-          }
+
           onSelect={selectEntity}
           onBeginMilestone={beginMilestone}
           onConstrainAnchorMove={constrainAnchorMove}
           onMoveAnchor={moveAnchor}
           onMoveTerminal={moveTerminal}
-          onBatchMove={batchMove}
+          onBatchDelay={batchDelay}
           onUpdateInspector={updateInspector}
           onDeleteMilestones={removeMilestones}
-          onSubmit={submit}
-        />
-        </section>
 
-        <section id="task-composer-review" aria-labelledby="task-composer-review-title" tabIndex={-1} className="scroll-mt-40 space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
-          <h2 id="task-composer-review-title" className="font-semibold">{isRevisionComposer ? "3. 检查与送审" : "3. 检查与保存"}</h2>
-          <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div className="min-w-0"><dt className="text-muted-foreground">任务名称</dt><dd className="mt-1 break-words [overflow-wrap:anywhere]">{state.title || "尚未填写"}</dd></div>
-            <div><dt className="text-muted-foreground">计划节点</dt><dd className="mt-1">开始 → {state.milestones.length} 个里程碑 → 结束</dd></div>
-            <div><dt className="text-muted-foreground">成员</dt><dd className="mt-1">{state.members.filter((member) => member.role === "OWNER").length} 名负责人 · {state.members.length} 名成员</dd></div>
-            <div><dt className="text-muted-foreground">本次操作</dt><dd className="mt-1">{isRevisionComposer ? "提交候选计划审批" : isEditingDraft ? "保存草稿修改" : "创建任务草稿"}</dd></div>
-          </dl>
-          <p className="text-sm text-muted-foreground">
-            {isRevisionComposer
-              ? "提交后进入审批，当前生效计划不会立即被替换；承接节点保持只读。"
-              : "允许不添加里程碑；草稿可暂不设置成员，激活前仍需有效负责人。保存时沿用原有字段与计划校验。"}
-          </p>
-          <p className="text-sm text-muted-foreground">本地自动保存不等于已提交到服务端。若校验未通过，将展开并定位需要修改的字段。</p>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-muted-foreground">{issues.length > 0 ? `${issues.length} 项待修正` : "请核对资料、计划时间与本次操作"}</span>
-            <Button type="button" disabled={submitting || (isEditingDraft && !dirty)} onClick={submit}>
-              {submitting ? "正在提交…" : isEditingDraft ? "确认保存任务" : isResubmittingRevision ? "确认修改并重新送审" : isRevisionComposer ? "确认创建并送审" : "确认创建草稿"}
-            </Button>
-          </div>
-        </section>
+        />
       </div>
 
       <Dialog
@@ -1166,7 +1153,7 @@ export function TaskComposerClient({
         <DialogContent className="sm:max-w-md" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>
-              {isEditingDraft ? "离开任务编辑？" : "离开任务编辑器？"}
+              {isEditingDraft ? "离开 Task 编辑？" : "离开 Task Composer？"}
             </DialogTitle>
             <DialogDescription>
               当前修改尚未提交到服务端。你可以保留本地草稿后离开，或放弃草稿。
@@ -1238,17 +1225,6 @@ export function TaskComposerClient({
       </Dialog>
     </div>
   );
-}
-
-function revealComposerTarget(targetId: string, block: ScrollLogicalPosition = "center") {
-  const target = document.getElementById(targetId);
-  let ancestor: HTMLElement | null = target;
-  while (ancestor) {
-    if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
-    ancestor = ancestor.parentElement;
-  }
-  target?.scrollIntoView({ block });
-  target?.focus({ preventScroll: true });
 }
 
 function ComposerSection({

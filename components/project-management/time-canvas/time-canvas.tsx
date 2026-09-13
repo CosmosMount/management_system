@@ -79,6 +79,8 @@ export function TimeCanvas({
   onViewportChange,
   onZoomChange,
   onSelectionChange,
+  toolbarAction,
+  highlightedRange,
 }: TimeCanvasProps) {
   const display: Required<TimeCanvasDisplayOptions> = {
     showBusy: displayInput?.showBusy ?? true,
@@ -498,6 +500,7 @@ export function TimeCanvas({
         }
         onToday={scrollToToday}
         onZoomChange={changeZoom}
+        action={toolbarAction}
       />
       {model.anchors.some((anchor) => anchor.currentNodeDeadline) && <div className="px-3 py-2"><DeadlineLegend /></div>}
 
@@ -548,6 +551,16 @@ export function TimeCanvas({
               className="relative min-w-full"
               style={{ width: rowHeaderWidth + scale.contentWidthPx }}
             >
+              {highlightedRange && (
+                <div
+                  className="pointer-events-none absolute inset-y-0 z-0 bg-amber-100/45"
+                  style={{
+                    left: rowHeaderWidth + timeToX(highlightedRange.startMs, scale),
+                    width: Math.max(0, timeToX(highlightedRange.endMs, scale) - timeToX(highlightedRange.startMs, scale)),
+                  }}
+                  data-testid="time-canvas-highlighted-range"
+                />
+              )}
               <TimeAxis
                 ticks={ticks}
                 scale={scale}

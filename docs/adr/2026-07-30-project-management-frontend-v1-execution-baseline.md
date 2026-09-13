@@ -64,7 +64,7 @@
 17. 纵向人员/Task 行使用 `@tanstack/react-virtual`，依赖变更必须同步 lockfile。
 18. 连续时间拖动、Resize 和框选使用 Pointer Events；本轮不引入 dnd-kit 或新的日期库。所有拖动仍必须有键盘和精确表单等价路径。
 19. Task 本地草稿使用 localStorage，key 按部署环境和 `accountId` 隔离，并携带 `schemaVersion`；提交成功才清理草稿。
-20. 桌面使用 `TimeCanvas`，Pixel 5 等窄屏使用共享 DTO 的 `TimeAgenda`/纵向节点编辑，不缩小桌面甘特图来替代移动交互。
+20. 统一使用 `TimeCanvas`，不按设备切换时间线或节点编辑组件。
 
 ## 本轮延期
 
@@ -83,7 +83,7 @@
 
 - 原 P0–P8 保留为领域阶段和历史 WBS；剩余工作按 S0–S10 顺序关单，二者不得混写为同一套完成状态。
 - P5 handoff 不能直接作为当前 P5 关单证据。必须重新验证 preview 隐私、capability、并发 transition/scanner、fingerprint 首次竞争、scanner 与人工处理竞争、31 天 merge 上限、缺失 Allocation 解释、通知操作者和 Revision 切换后的版本上下文，并补足相应回归测试。
-- `345b5b0` 的已有页面和 adapter 应复用、升级和回归，不重复实现；只有完成 TimeCanvas/TimeAgenda、页面闭环、权限拒绝路径、桌面/移动 E2E 和独立审查后，才能把对应 P4/P6 项标记为完成。
+- `345b5b0` 的已有页面和 adapter 应复用、升级和回归，不重复实现；只有完成 TimeCanvas、页面闭环、权限拒绝路径、统一界面 E2E 和独立审查后，才能把对应 P4/P6 项标记为完成。
 - schema、公共 DTO、共享路由或锁文件由单一实施工作包串行修改。每个阶段均执行“实现 → 独立审查 → 修复 → QA → 再审”循环。
 - 生产维护窗口不属于自动执行范围。必须获得用户明确授权以及 BO、TL、QA、DBA 四方签字后，才能执行正式发布。
 

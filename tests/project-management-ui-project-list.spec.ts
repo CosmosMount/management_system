@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import { createDeadlineTask } from "./helpers/current-node-deadline-fixtures";
-import { createAccountPerson, grantGlobalProjectAdministrator } from "./helpers/project-management-canvas-security-fixtures";
-import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import { actor, createAccountPerson, createTask, grantGlobalProjectAdministrator } from "./helpers/project-management-canvas-security-fixtures";
+import { expectHealthyPage, expectNoHorizontalOverflow, loginAsTestUser } from "./helpers/functional-fixtures";
+import { listTasks } from "../lib/project-management/queries/task-list-queries";
+import { listProjects } from "../lib/project-management/queries/project-list-queries";
 import { createProjectListFixture } from "./helpers/project-list-fixtures";
 
 test.beforeAll(async () => {
@@ -43,7 +45,7 @@ test("项目行内任务紧急优先、最多两行，弹层与长名称提示�
   await expect(page.getByRole("tooltip")).toContainText(fixture.overdue.title);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("tooltip")).toBeHidden();
-  if (testInfo.project.name === "desktop") {
+  {
     await overdueChip.hover();
     await expect(page.getByRole("tooltip")).toContainText(fixture.overdue.title);
     await page.keyboard.press("Escape");
@@ -85,6 +87,94 @@ test("项目行内任务紧急优先、最多两行，弹层与长名称提示�
   expect(errors).toEqual([]);
 });
 
+for (const ownerCount of [0, 1, 2, 4]) {
+  test(`项目与任务列表叠放头像：${ownerCount} 位负责人`, async ({ page, context, baseURL }, testInfo) => {
+    const viewer = await createAccountPerson("列表查看者");
+    const participant = await createAccountPerson("不能当作负责人的参与人");
+    const removedOwner = await createAccountPerson("已移除负责人");
+    const owners = [];
+    for (let index = 0; index < ownerCount; index += 1) {
+      owners.push(await createAccountPerson(["李示例", "王示例", "同名负责人".repeat(10), "同名负责人".repeat(10)][index], index === 3 ? "INACTIVE" : "ACTIVE"));
+    }
+    if (ownerCount >= 2) await prisma.person.update({ where: { id: owners[0].person.id }, data: { avatar: "/owner-avatar-test-good.svg" } });
+    if (owners[1]) await prisma.person.update({ where: { id: owners[1].person.id }, data: { avatar: "/owner-avatar-test-broken.svg" } });
+    await page.route("**/owner-avatar-test-good.svg", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#94a3b8"/><text x="16" y="22" text-anchor="middle" fill="white" font-size="18">李</text></svg>' }));
+    await page.route("**/owner-avatar-test-broken.svg", (route) => route.fulfill({ status: 404, body: "" }));
+    const title = `头像验收 ${randomUUID()}`;
+    const members = [
+      ...owners.map((owner) => ({ personId: owner.person.id, role: "OWNER" as const })),
+      { personId: participant.person.id, role: "PARTICIPANT" as const },
+      { personId: removedOwner.person.id, role: "OWNER" as const },
+    ];
+    const project = await prisma.project.create({ data: {
+      name: title, description: "负责人头像叠放", status: "ACTIVE", requesterAccountId: viewer.account.id,
+      members: { create: members.map((member, index) => ({ ...member, createdByAccountId: viewer.account.id, createdAt: new Date(Date.UTC(2026, 7, 1) + index), removedAt: member.personId === removedOwner.person.id ? new Date() : null })) },
+    } });
+    const task = await createTask({ ownerAccountId: viewer.account.id, title, team: "英雄", techGroup: "电控", members, status: "DRAFT" });
+    for (const [index, member] of members.entries()) {
+      await prisma.taskMember.updateMany({ where: { taskId: task.taskId, personId: member.personId }, data: { createdAt: new Date(Date.UTC(2026, 7, 1) + index), removedAt: member.personId === removedOwner.person.id ? new Date() : null } });
+    }
+    const taskData = (await listTasks({ actor: actor(viewer), input: { query: title } })).items.find((entry) => entry.id === task.taskId)!;
+    const projectData = (await listProjects({ actor: actor(viewer), input: { query: title } })).items.find((entry) => entry.id === project.id)!;
+    expect(taskData.members.some((member) => member.personId === participant.person.id)).toBe(true);
+    expect(projectData.owners.map((owner) => owner.personId)).toEqual(owners.map((owner) => owner.person.id));
+    expect(taskData.members.filter((member) => member.role === "OWNER").map((member) => member.personId)).toEqual(owners.map((owner) => owner.person.id));
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await loginAsTestUser(context, baseURL, { openId: viewer.openId, name: "列表查看者" });
+    for (const [kind, id, label] of [["project", project.id, "项目负责人"], ["task", task.taskId, "任务负责人"]] as const) {
+      await page.goto(`/progress/${kind}s?mine=0&status=&q=${encodeURIComponent(title)}`);
+      const row = page.getByTestId(`${kind}-list-item-${id}`);
+      const group = row.getByTestId("owner-avatar-group");
+      await expect(group).toBeVisible();
+      await expect(group.getByTestId("owner-avatar")).toHaveCount(Math.min(2, ownerCount));
+      await expect(group.getByTestId("owner-avatar-overflow")).toHaveCount(ownerCount > 2 ? 1 : 0);
+      if (ownerCount > 2) await expect(group.getByTestId("owner-avatar-overflow")).toHaveText(`+${ownerCount - 2}`);
+      if (ownerCount === 0) {
+        await expect(group).toHaveText("—");
+        await expect(group).toHaveAccessibleName(`${label}未设置`);
+      } else {
+        if (ownerCount === 1) {
+          await expect(group.locator("img")).toHaveCount(0);
+          await expect(group.getByTestId("owner-avatar")).toHaveText("李");
+        } else {
+          await expect(group.locator("img")).toHaveCount(1);
+          await expect.poll(() => group.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+        }
+        if (ownerCount > 1) {
+          await expect(group.getByTestId("owner-avatar").nth(1)).toHaveText("王");
+          const boxes = await group.getByTestId("owner-avatar").evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().toJSON()));
+          expect(boxes[1].x).toBeLessThan(boxes[0].x + boxes[0].width);
+        }
+        await expect(group).not.toContainText("李示例");
+      }
+      await group.focus();
+      const tooltip = page.getByRole("tooltip");
+      await expect(tooltip).toContainText(label);
+      for (const owner of owners) await expect(tooltip).toContainText(owner.person.displayName);
+      if (ownerCount === 4) await expect(tooltip).toContainText("同名负责人（已停用）");
+      await expect(tooltip).not.toContainText(participant.person.displayName);
+      await expect(tooltip).not.toContainText(removedOwner.person.displayName);
+      await page.keyboard.press("Escape");
+      await expect(tooltip).toBeHidden();
+      await group.hover();
+      await expect(tooltip).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expectHealthyPage(page);
+      await expectNoHorizontalOverflow(page);
+      if (ownerCount === 4) {
+        await row.screenshot({ path: testInfo.outputPath(`${kind}-owner-avatars.png`), animations: "disabled" });
+        await page.setViewportSize({ width: 1100, height: 1000 });
+        await group.scrollIntoViewIfNeeded();
+        await expect(group).toBeInViewport();
+        await expectNoHorizontalOverflow(page);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 test("六个项目的总览视觉验收保留独立项目行和紧凑任务摘要", async ({ page, context, baseURL }, testInfo) => {
   test.setTimeout(120_000);
   const owner = await createAccountPerson(`林示例 ${randomUUID()}`);
@@ -119,7 +209,7 @@ test("六个项目的总览视觉验收保留独立项目行和紧凑任务摘�
   await expect.poll(() => list.getByTestId("task-chip-state").evaluateAll((elements) => elements.every((element) => element.scrollWidth <= element.clientWidth))).toBe(true);
   await expectHealthyPage(page);
   await page.screenshot({ path: testInfo.outputPath("project-list-six-projects.png"), fullPage: true, animations: "disabled" });
-  if (testInfo.project.name === "desktop") {
+  {
     await list.evaluate((element) => { element.style.containerType = "normal"; });
     await expect(page.getByText("任务概览", { exact: true })).toBeVisible();
     for (const row of await list.getByRole("article").all()) expect((await row.boundingBox())!.height).toBeLessThanOrEqual(160);

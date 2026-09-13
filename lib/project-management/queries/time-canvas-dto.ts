@@ -37,6 +37,7 @@ export function toTaskAnchorDto(
     }),
     id: task.id,
     title: task.title,
+    project: task.project,
     status: task.status,
     priority: task.priority,
     createdAt: task.createdAt.toISOString(),
