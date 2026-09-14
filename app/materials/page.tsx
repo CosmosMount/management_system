@@ -147,6 +147,11 @@ export default async function MaterialsPage({
                       {material.name}
                     </Link>
                     <Badge variant="outline">{material.techGroup}</Badge>
+                    {material.pairedMaterial && (
+                      <Badge variant="secondary">
+                        配套：{material.pairedMaterial.name}
+                      </Badge>
+                    )}
                     <Badge
                       variant={material.activeLoan ? "secondary" : "default"}
                     >

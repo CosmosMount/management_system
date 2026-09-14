@@ -16,12 +16,20 @@ export function MaterialForm() {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [name, setName] = useState("");
+  const [quantity, setQuantity] = useState("1");
   const [price, setPrice] = useState("");
   const [techGroup, setTechGroup] = useState("");
+  const [paired, setPaired] = useState(false);
+  const [companionName, setCompanionName] = useState("");
+  const [companionPrice, setCompanionPrice] = useState("");
+  const [companionTechGroup, setCompanionTechGroup] = useState("");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [idempotencyKey] = useState(createClientUuid);
-  const dirty = Boolean(name || price || techGroup);
+  const dirty = Boolean(
+    name || price || techGroup || quantity !== "1" || paired ||
+    companionName || companionPrice || companionTechGroup,
+  );
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -68,6 +76,13 @@ export function MaterialForm() {
     setError("");
     const nextErrors: Record<string, string[]> = {};
     if (!name.trim()) nextErrors.name = ["请输入物资名称"];
+    const parsedQuantity = Number(quantity);
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity < 1 || parsedQuantity > 100) {
+      nextErrors.quantity = ["数量须为 1 至 100 的整数"];
+    }
+    if ((parsedQuantity > 1 ? `${name.trim()}-${parsedQuantity}` : name.trim()).length > 200) {
+      nextErrors.name = ["物资名称加编号后不能超过 200 个字符"];
+    }
     if (
       !/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/.test(price.trim())
     ) {
@@ -82,14 +97,31 @@ export function MaterialForm() {
     ) {
       nextErrors.techGroup = ["请选择所属技术组"];
     }
+    if (paired) {
+      if (!companionName.trim()) {
+        nextErrors.companionName = ["请输入配套物品名称"];
+      } else if (companionName.trim() === name.trim()) {
+        nextErrors.companionName = ["两种配套物品名称不能相同"];
+      } else if (
+        (parsedQuantity > 1
+          ? `${companionName.trim()}-${parsedQuantity}`
+          : companionName.trim()).length > 200
+      ) {
+        nextErrors.companionName = ["配套物品名称加编号后不能超过 200 个字符"];
+      }
+      if (!/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/.test(companionPrice.trim())) {
+        nextErrors.companionPrice = ["价格应为 0 至 9999999999.99，最多保留两位小数"];
+      }
+      if (!TECH_GROUP_OPTIONS.includes(companionTechGroup as (typeof TECH_GROUP_OPTIONS)[number])) {
+        nextErrors.companionTechGroup = ["请选择配套物品所属技术组"];
+      }
+    }
     if (Object.keys(nextErrors).length > 0) {
       setFieldErrors(nextErrors);
       requestAnimationFrame(() => {
-        const firstId = nextErrors.name
-          ? "material-name"
-          : nextErrors.price
-            ? "material-price"
-            : "material-tech-group";
+        const firstKey = ["name", "quantity", "price", "techGroup", "companionName", "companionPrice", "companionTechGroup"]
+          .find((key) => nextErrors[key]?.length);
+        const firstId = fieldId(firstKey);
         document.getElementById(firstId)?.focus();
       });
       return;
@@ -97,12 +129,18 @@ export function MaterialForm() {
 
     const result = await createMaterial({
       name,
+      quantity: parsedQuantity,
+      paired,
+      ...(paired ? { companionName, companionPrice, companionTechGroup } : {}),
       price,
       techGroup,
       idempotencyKey,
     });
     if (!result.ok) {
-      const supported = new Set(["name", "price", "techGroup"]);
+      const supported = new Set([
+        "name", "quantity", "price", "techGroup",
+        "companionName", "companionPrice", "companionTechGroup",
+      ]);
       const nextFieldErrors = Object.fromEntries(
         Object.entries(result.error.fieldErrors ?? {}).filter(([key]) =>
           supported.has(key),
@@ -113,22 +151,20 @@ export function MaterialForm() {
         Object.keys(nextFieldErrors).length > 0 ? "" : result.error.message,
       );
       requestAnimationFrame(() => {
-        const firstKey = ["name", "price", "techGroup"].find(
+        const firstKey = ["name", "quantity", "price", "techGroup", "companionName", "companionPrice", "companionTechGroup"].find(
           (key) => nextFieldErrors[key]?.length,
         );
         document
-          .getElementById(
-            firstKey === "name"
-              ? "material-name"
-              : firstKey === "price"
-                ? "material-price"
-                : "material-tech-group",
-          )
+          .getElementById(fieldId(firstKey))
           ?.focus();
       });
       return;
     }
-    router.push(routes.materials.detail(result.data.materialId));
+    router.push(
+      parsedQuantity > 1 || paired
+        ? routes.materials.root
+        : routes.materials.detail(result.data.materialId),
+    );
     router.refresh();
   }
 
@@ -159,6 +195,28 @@ export function MaterialForm() {
               id="material-name-error"
               messages={fieldErrors.name}
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="material-quantity">数量</Label>
+            <Input
+              id="material-quantity"
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              required
+              value={quantity}
+              aria-invalid={Boolean(fieldErrors.quantity)}
+              aria-describedby="material-quantity-help material-quantity-error"
+              onChange={(event) => {
+                setQuantity(event.target.value);
+                clearFieldError("quantity");
+              }}
+            />
+            <p id="material-quantity-help" className="break-words text-sm text-muted-foreground">
+              单次可登记 1–100 件。1 件保留原名，多件按“物资名称-1、物资名称-2…”命名，每件独立生成二维码；价格为单件价格。
+            </p>
+            <FieldError id="material-quantity-error" messages={fieldErrors.quantity} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="material-price">价格（元）</Label>
@@ -212,6 +270,54 @@ export function MaterialForm() {
               messages={fieldErrors.techGroup}
             />
           </div>
+          <label className="flex items-start gap-3 rounded-lg border p-4">
+            <input
+              type="checkbox"
+              aria-label="登记配套物品"
+              className="mt-1 size-4"
+              checked={paired}
+              onChange={(event) => setPaired(event.target.checked)}
+            />
+            <span className="min-w-0">
+              <span className="block font-medium">登记配套物品</span>
+              <span className="block text-sm text-muted-foreground">
+                两种物品按相同序号组成一套，扫描任一件都会整套领用或归还。
+              </span>
+            </span>
+          </label>
+          {paired && (
+            <div className="space-y-5 rounded-xl border bg-muted/30 p-4">
+              <h2 className="font-semibold">配套物品信息</h2>
+              <div className="space-y-2">
+                <Label htmlFor="material-companion-name">配套物品名称</Label>
+                <Input id="material-companion-name" value={companionName} maxLength={200} required
+                  aria-invalid={Boolean(fieldErrors.companionName)}
+                  aria-describedby={fieldErrors.companionName ? "material-companion-name-error" : undefined}
+                  onChange={(event) => { setCompanionName(event.target.value); clearFieldError("companionName"); }} />
+                <FieldError id="material-companion-name-error" messages={fieldErrors.companionName} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="material-companion-price">配套物品价格（元）</Label>
+                <Input id="material-companion-price" value={companionPrice} inputMode="decimal" placeholder="0.00" required
+                  aria-invalid={Boolean(fieldErrors.companionPrice)}
+                  aria-describedby={fieldErrors.companionPrice ? "material-companion-price-error" : undefined}
+                  onChange={(event) => { setCompanionPrice(event.target.value); clearFieldError("companionPrice"); }} />
+                <FieldError id="material-companion-price-error" messages={fieldErrors.companionPrice} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="material-companion-tech-group">配套物品所属技术组</Label>
+                <select id="material-companion-tech-group" value={companionTechGroup} required
+                  aria-invalid={Boolean(fieldErrors.companionTechGroup)}
+                  aria-describedby={fieldErrors.companionTechGroup ? "material-companion-tech-group-error" : undefined}
+                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                  onChange={(event) => { setCompanionTechGroup(event.target.value); clearFieldError("companionTechGroup"); }}>
+                  <option value="">请选择技术组</option>
+                  {TECH_GROUP_OPTIONS.map((group) => <option key={group} value={group}>{group}</option>)}
+                </select>
+                <FieldError id="material-companion-tech-group-error" messages={fieldErrors.companionTechGroup} />
+              </div>
+            </div>
+          )}
           <p className="text-sm text-muted-foreground">
             登记后系统会生成长期唯一的二维码；二维码标识不会随领用、归还或信息展示变化。
           </p>
@@ -237,4 +343,16 @@ export function MaterialForm() {
       </Card>
     </div>
   );
+}
+
+function fieldId(key?: string) {
+  return {
+    name: "material-name",
+    quantity: "material-quantity",
+    price: "material-price",
+    techGroup: "material-tech-group",
+    companionName: "material-companion-name",
+    companionPrice: "material-companion-price",
+    companionTechGroup: "material-companion-tech-group",
+  }[key ?? ""] ?? "material-name";
 }

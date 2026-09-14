@@ -27,6 +27,7 @@ export type MaterialListItem = {
   price: string;
   techGroup: string;
   createdAt: string;
+  pairedMaterial: { id: string; name: string } | null;
   activeLoan: {
     id: string;
     borrowerAccountId: string;
@@ -39,6 +40,7 @@ export type MaterialListItem = {
 export async function listMaterials(input: unknown) {
   const parsed = materialListSchema.parse(input);
   const where = {
+    deletedAt: null,
     ...(parsed.query
       ? { name: { contains: parsed.query, mode: "insensitive" as const } }
       : {}),
@@ -50,13 +52,13 @@ export async function listMaterials(input: unknown) {
         : {}),
   };
 
-  const { totalCount, inUseCount, rows } = await prisma.$transaction(
+  const { totalCount, inUseCount, rows, pairedRows } = await prisma.$transaction(
     async (tx) => {
       // The pg adapter uses one client per interactive transaction, so keep
       // these reads sequential instead of overlapping client.query() calls.
-      const totalCount = await tx.material.count();
+      const totalCount = await tx.material.count({ where: { deletedAt: null } });
       const inUseCount = await tx.materialLoan.count({
-        where: { returnedAt: null },
+        where: { returnedAt: null, material: { deletedAt: null } },
       });
       const rows = await tx.material.findMany({
         where,
@@ -68,6 +70,7 @@ export async function listMaterials(input: unknown) {
           price: true,
           techGroup: true,
           createdAt: true,
+          pairKey: true,
           loans: {
             where: { returnedAt: null },
             take: 1,
@@ -76,7 +79,14 @@ export async function listMaterials(input: unknown) {
         },
       });
 
-      return { totalCount, inUseCount, rows };
+      const pairKeys = rows.flatMap((row) => row.pairKey ? [row.pairKey] : []);
+      const pairedRows = pairKeys.length > 0
+        ? await tx.material.findMany({
+            where: { pairKey: { in: pairKeys }, deletedAt: null },
+            select: { id: true, name: true, pairKey: true },
+          })
+        : [];
+      return { totalCount, inUseCount, rows, pairedRows };
     },
   );
 
@@ -85,7 +95,12 @@ export async function listMaterials(input: unknown) {
     inUseCount,
     availableCount: totalCount - inUseCount,
     hasMore: rows.length > 100,
-    items: rows.slice(0, 100).map((row) => serializeListItem(row)),
+    items: rows.slice(0, 100).map((row) => serializeListItem(
+      row,
+      row.pairKey
+        ? pairedRows.find((item) => item.pairKey === row.pairKey && item.id !== row.id) ?? null
+        : null,
+    )),
   };
 }
 
@@ -100,6 +115,9 @@ export async function getMaterialDetail(materialId: unknown) {
       price: true,
       techGroup: true,
       createdAt: true,
+      deletedAt: true,
+      pairKey: true,
+      createdByAccountId: true,
       createdByAccount: {
         select: { person: { select: { displayName: true } } },
       },
@@ -124,6 +142,12 @@ export async function getMaterialDetail(materialId: unknown) {
     },
   });
   if (!material) return null;
+  const pairedMaterial = material.pairKey
+    ? await prisma.material.findFirst({
+        where: { pairKey: material.pairKey, id: { not: material.id } },
+        select: { id: true, name: true, deletedAt: true },
+      })
+    : null;
 
   const activeLoan = material.loans.find((loan) => loan.returnedAt === null);
   return {
@@ -133,6 +157,15 @@ export async function getMaterialDetail(materialId: unknown) {
     price: material.price.toFixed(2),
     techGroup: material.techGroup,
     createdAt: material.createdAt.toISOString(),
+    deletedAt: material.deletedAt?.toISOString() ?? null,
+    createdByAccountId: material.createdByAccountId,
+    pairedMaterial: pairedMaterial
+      ? {
+          id: pairedMaterial.id,
+          name: pairedMaterial.name,
+          deletedAt: pairedMaterial.deletedAt?.toISOString() ?? null,
+        }
+      : null,
     createdByName:
       material.createdByAccount.person?.displayName ?? "未知用户",
     activeLoan: activeLoan ? serializeLoan(activeLoan) : null,
@@ -143,13 +176,14 @@ export async function getMaterialDetail(materialId: unknown) {
 export async function getMaterialByQrToken(qrToken: unknown) {
   const token = materialQrTokenSchema.parse(qrToken);
   const material = await prisma.material.findUnique({
-    where: { qrToken: token },
+    where: { qrToken: token, deletedAt: null },
     select: {
       id: true,
       qrToken: true,
       name: true,
       price: true,
       techGroup: true,
+      pairKey: true,
       loans: {
         where: { returnedAt: null },
         take: 1,
@@ -158,12 +192,21 @@ export async function getMaterialByQrToken(qrToken: unknown) {
     },
   });
   if (!material) return null;
+  const pairedMaterial = material.pairKey
+    ? await prisma.material.findFirst({
+        where: { pairKey: material.pairKey, id: { not: material.id }, deletedAt: null },
+        select: { id: true, name: true, price: true, techGroup: true },
+      })
+    : null;
   return {
     id: material.id,
     qrToken: material.qrToken,
     name: material.name,
     price: material.price.toFixed(2),
     techGroup: material.techGroup,
+    pairedMaterial: pairedMaterial
+      ? { ...pairedMaterial, price: pairedMaterial.price.toFixed(2) }
+      : null,
     activeLoan: material.loans[0]
       ? serializeLoan(material.loans[0])
       : null,
@@ -176,6 +219,7 @@ function serializeListItem(row: {
   price: { toFixed(digits: number): string };
   techGroup: string;
   createdAt: Date;
+  pairKey: string | null;
   loans: Array<{
     id: string;
     borrowerAccountId: string;
@@ -184,7 +228,7 @@ function serializeListItem(row: {
       person: { displayName: string; avatar: string | null } | null;
     };
   }>;
-}): MaterialListItem {
+}, pairedMaterial: { id: string; name: string } | null): MaterialListItem {
   const activeLoan = row.loans[0];
   return {
     id: row.id,
@@ -192,6 +236,7 @@ function serializeListItem(row: {
     price: row.price.toFixed(2),
     techGroup: row.techGroup,
     createdAt: row.createdAt.toISOString(),
+    pairedMaterial,
     activeLoan: activeLoan ? serializeLoan(activeLoan) : null,
   };
 }

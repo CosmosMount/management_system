@@ -14,6 +14,12 @@
 
 ## 全功能回归分层
 
+配套物资复用物资管理定向命令，并由 `material-soft-delete-migration.spec.ts` 覆盖新增 `pairKey` 的前向兼容和不可变约束。业务回归覆盖两类名称、价格和技术组，相同序号成套，重复登记幂等，扫描任一件整套领用归还，相同时间与领用人，其他用户拒绝，第二件写入失败整套回滚，一张照片分别绑定两条历史，详情及台账配套提示和整套删除。数据库测试只通过官方 runner 的随机隔离 PostgreSQL 执行，不向真实飞书收件人发送消息。
+
+物资批量登记定向验证使用 `npm run test:e2e -- tests/material-management-concurrency.spec.ts tests/material-management-ui.spec.ts`，仅通过官方隔离数据库、受控服务和飞书禁发保护运行。覆盖名称与数量、逐件二维码/单价/审计、并发幂等重试、批量中途失败回滚、100 件上限与名称长度边界、停用人员拒绝，以及 Desktop `1440x1000` 和同一界面的窄窗口操作。
+
+物资软删除在上述两个 spec 中覆盖登记人/超级管理员允许、普通人/项目管理员/停用/撤权拒绝、权限锁并发撤权、领用竞争、审计失败回滚、重复删除、台账计数、历史和照片保留、旧二维码及请求重放拒绝，以及桌面和窄窗口的确认/取消/冲突错误/已删除只读状态。新增 `material-soft-delete-migration.spec.ts` 从真实前置迁移链构造既有物资、领用及审计，在额外随机本机 `_test`/shadow 数据库显式运行 `npm run db:deploy` 两次和两种 Prisma schema drift 检查。定向命令为 `npm run test:e2e -- tests/material-management-concurrency.spec.ts tests/material-management-ui.spec.ts tests/material-soft-delete-migration.spec.ts`；仅使用官方 runner 和飞书禁发保护。
+
 - **L0 静态与构建**：`npm run check`、migration drift 和 `npm run build` 全部通过；warning 必须记录并分级。
 - **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、物资管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
 - **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、物资台账/二维码、管理员筛选均可刷新复现，且控制台无未处理错误。

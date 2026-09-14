@@ -46,6 +46,11 @@ export default async function MaterialScanPage({
             <CardTitle className="break-words text-xl">
               {material.name}
             </CardTitle>
+            {material.pairedMaterial && (
+              <p className="break-words text-sm text-muted-foreground">
+                配套物品：{material.pairedMaterial.name}
+              </p>
+            )}
             <div className="flex flex-wrap justify-center gap-2 pt-2">
               <Badge variant="outline">{material.techGroup}</Badge>
               <Badge variant={material.activeLoan ? "secondary" : "default"}>
@@ -99,10 +104,10 @@ export default async function MaterialScanPage({
               </div>
             ) : (
               <MaterialScanConfirmation
-                key={material.activeLoan?.id ?? "available"}
                 qrToken={material.qrToken}
                 operation={operation}
                 expectedActiveLoanId={material.activeLoan?.id ?? null}
+                pairedMaterialName={material.pairedMaterial?.name ?? null}
               />
             )}
           </CardContent>

@@ -19,10 +19,12 @@ export function MaterialScanConfirmation({
   qrToken,
   operation,
   expectedActiveLoanId,
+  pairedMaterialName,
 }: {
   qrToken: string;
   operation: "CHECKOUT" | "RETURN";
   expectedActiveLoanId: string | null;
+  pairedMaterialName: string | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [idempotencyKey] = useState(createClientUuid);
@@ -36,11 +38,6 @@ export function MaterialScanConfirmation({
 
   async function submit() {
     setError("");
-    if (operation === "RETURN" && !returnPhoto) {
-      setError("请先拍摄物资归还照片");
-      document.getElementById("material-return-photo")?.focus();
-      return;
-    }
     const result =
       operation === "RETURN"
         ? await returnMaterial(buildReturnFormData({
@@ -60,6 +57,15 @@ export function MaterialScanConfirmation({
       return;
     }
     setSuccess(result.data);
+  }
+
+  function handleSubmit() {
+    if (operation === "RETURN" && !returnPhoto) {
+      setError("请先拍摄物资归还照片");
+      document.getElementById("material-return-photo")?.focus();
+      return;
+    }
+    startTransition(submit);
   }
 
   if (success) {
@@ -93,8 +99,12 @@ export function MaterialScanConfirmation({
     <div className="space-y-4">
       <p className="text-sm leading-6 text-muted-foreground">
         {operation === "CHECKOUT"
-          ? "确认后将以当前登录用户领用该物资。"
-          : "请现场拍摄物资当前状态。照片将在下一位用户成功领用时自动删除。"}
+          ? pairedMaterialName
+            ? `确认后将同时领用当前物资和配套物品“${pairedMaterialName}”。`
+            : "确认后将以当前登录用户领用该物资。"
+          : pairedMaterialName
+            ? `请拍摄包含整套物资的当前状态。确认后将同时归还当前物资和配套物品“${pairedMaterialName}”。`
+            : "请现场拍摄物资当前状态。照片将在下一位用户成功领用时自动删除。"}
       </p>
       {operation === "RETURN" && (
         <div className="space-y-2">
@@ -120,7 +130,7 @@ export function MaterialScanConfirmation({
             }}
           />
           <p id="material-return-photo-help" className="text-xs text-muted-foreground">
-            手机会优先打开后置相机；电脑可选择摄像头照片。仅支持常见图片格式，最大 8MB。
+            {pairedMaterialName ? "请确保整套两件物品均在照片中。" : ""}手机会优先打开后置相机；电脑可选择摄像头照片。仅支持常见图片格式，最大 8MB。
           </p>
         </div>
       )}
@@ -137,7 +147,7 @@ export function MaterialScanConfirmation({
         size="lg"
         className="w-full"
         disabled={pending}
-        onClick={() => startTransition(submit)}
+        onClick={handleSubmit}
       >
         {operation === "CHECKOUT" ? (
           <PackageCheck aria-hidden="true" />

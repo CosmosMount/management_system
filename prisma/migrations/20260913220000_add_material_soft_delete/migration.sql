@@ -1,0 +1,1 @@
+ALTER TABLE "Material" ADD COLUMN "deletedAt" TIMESTAMPTZ(6);
