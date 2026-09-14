@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, History, PackageCheck, PackageOpen } from "lucide-react";
 import { MaterialQrCode } from "@/components/material-management/material-qr-code";
+import { MaterialDeleteButton } from "@/components/material-management/material-delete-button";
+import { canDeleteMaterial } from "@/lib/material-management/permissions";
 import { D110SerialPrinter } from "@/components/material-management/d110-serial-printer";
 import { ImagePreview } from "@/components/image-preview";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
@@ -26,7 +28,7 @@ export default async function MaterialDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  await getMaterialActorOrRedirect(routes.materials.detail(id));
+  const actor = await getMaterialActorOrRedirect(routes.materials.detail(id));
   const material = await getMaterialDetail(id).catch(() => null);
   if (!material) notFound();
   const scanUrl = buildAppUrl(
@@ -42,6 +44,15 @@ export default async function MaterialDetailPage({
         sectionLabel="物资管理"
         testId="material-management-command-bar"
         actions={
+          <>
+          {!material.deletedAt && canDeleteMaterial(actor, material.createdByAccountId) && (
+            <MaterialDeleteButton
+              materialId={material.id}
+              materialName={material.name}
+              pairedMaterialName={material.pairedMaterial?.name ?? null}
+              inUse={Boolean(material.activeLoan)}
+            />
+          )}
           <Link
             href={routes.materials.root}
             className={cn(buttonVariants({ variant: "outline" }))}
@@ -49,10 +60,16 @@ export default async function MaterialDetailPage({
             <ArrowLeft aria-hidden="true" />
             返回台账
           </Link>
+          </>
         }
       />
       <div className="mx-auto grid w-full min-w-0 max-w-5xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)]">
         <div className="min-w-0 space-y-6">
+          {material.deletedAt && (
+            <p role="status" className="rounded-lg border bg-muted p-4 text-sm">
+              物资已删除（{formatMaterialDateTime(material.deletedAt)}），不可再领用。以下保留历史信息供查询。
+            </p>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>物资信息</CardTitle>
@@ -70,6 +87,19 @@ export default async function MaterialDetailPage({
                   value={formatMaterialDateTime(material.createdAt)}
                 />
                 <Info label="登记人" value={material.createdByName} />
+                {material.pairedMaterial && (
+                  <div className="min-w-0">
+                    <dt className="text-sm text-muted-foreground">配套物品</dt>
+                    <dd className="mt-1 break-words font-medium">
+                      <Link
+                        href={routes.materials.detail(material.pairedMaterial.id)}
+                        className="hover:text-primary hover:underline"
+                      >
+                        {material.pairedMaterial.name}
+                      </Link>
+                    </dd>
+                  </div>
+                )}
               </dl>
             </CardContent>
           </Card>
@@ -83,7 +113,7 @@ export default async function MaterialDetailPage({
                 </p>
               </div>
               <Badge variant={material.activeLoan ? "secondary" : "default"}>
-                {material.activeLoan ? "使用中" : "可领用"}
+                {material.deletedAt ? "已删除" : material.activeLoan ? "使用中" : "可领用"}
               </Badge>
             </CardHeader>
             <CardContent>
@@ -111,7 +141,7 @@ export default async function MaterialDetailPage({
                     aria-hidden="true"
                   />
                   <p className="text-sm text-muted-foreground">
-                    当前无人使用，登录用户扫描右侧二维码后可确认领用。
+                    {material.deletedAt ? "物资已删除，二维码已停用。" : "当前无人使用，登录用户扫描右侧二维码后可确认领用。"}
                   </p>
                 </div>
               )}
@@ -161,7 +191,7 @@ export default async function MaterialDetailPage({
           </section>
         </div>
 
-        <Card className="h-fit lg:sticky lg:top-20">
+        {!material.deletedAt && <Card className="h-fit lg:sticky lg:top-20">
           <CardHeader>
             <CardTitle>专属二维码</CardTitle>
             <p className="text-sm text-muted-foreground">
@@ -180,7 +210,7 @@ export default async function MaterialDetailPage({
               techGroup={material.techGroup}
             />
           </CardContent>
-        </Card>
+        </Card>}
       </div>
     </>
   );

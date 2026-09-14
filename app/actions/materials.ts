@@ -12,6 +12,7 @@ import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import { materialScanSchema } from "@/lib/material-management/validations";
 import {
   createMaterial as createMaterialService,
+  deleteMaterial as deleteMaterialService,
   preflightMaterialReturn,
   scanMaterial as scanMaterialService,
   type MaterialScanResult,
@@ -29,13 +30,28 @@ export async function createMaterial(
   });
 }
 
+export async function deleteMaterial(
+  input: unknown,
+): Promise<ProjectManagementActionResult<{ materialId: string }>> {
+  return runMaterialAction("material.delete", "deleteMaterial", async () => {
+    const actor = await getCurrentProjectManagementActor();
+    const result = await deleteMaterialService(actor, input);
+    for (const material of result.relatedMaterials) {
+      revalidateMaterials(material.materialId, material.qrToken);
+    }
+    return { actorAccountId: actor.accountId, data: { materialId: result.materialId } };
+  });
+}
+
 export async function scanMaterial(
   input: unknown,
 ): Promise<ProjectManagementActionResult<MaterialScanResult>> {
   return runMaterialAction("material.scan", "scanMaterial", async () => {
     const actor = await getCurrentProjectManagementActor();
     const result = await scanMaterialService(actor, input);
-    revalidateMaterials(result.materialId);
+    for (const materialId of result.relatedMaterialIds) {
+      revalidateMaterials(materialId);
+    }
     return { actorAccountId: actor.accountId, data: result };
   });
 }
@@ -53,7 +69,9 @@ export async function returnMaterial(
     });
     const preflight = await preflightMaterialReturn(actor, input);
     if (preflight.kind === "REPLAY") {
-      revalidateMaterials(preflight.result.materialId);
+      for (const materialId of preflight.result.relatedMaterialIds) {
+        revalidateMaterials(materialId);
+      }
       return { actorAccountId: actor.accountId, data: preflight.result };
     }
 
@@ -64,14 +82,21 @@ export async function returnMaterial(
       });
     }
 
-    let savedPhoto: { publicPath: string; writeGeneration: string };
+    const savedPhotos: Array<{
+      loanId: string;
+      publicPath: string;
+      writeGeneration: string;
+    }> = [];
     try {
-      savedPhoto = await saveMaterialReturnPhoto(
-        preflight.loanId,
-        actor.openId,
-        photo,
-      );
+      for (const loanId of preflight.loanIds) {
+        const saved = await saveMaterialReturnPhoto(loanId, actor.openId, photo);
+        savedPhotos.push({ loanId, ...saved });
+      }
     } catch (error) {
+      await cleanupUploadPaths(
+        savedPhotos.map((saved) => saved.publicPath),
+        "material_paired_return_upload_compensation",
+      );
       const message =
         error instanceof Error ? error.message : "归还照片保存失败，请重试";
       throw validationError(message, { returnPhoto: [message] });
@@ -79,18 +104,25 @@ export async function returnMaterial(
 
     let result: MaterialScanResult;
     try {
-      result = await scanMaterialService(actor, input, {
-        returnPhotoPath: savedPhoto.publicPath,
-        writeGeneration: savedPhoto.writeGeneration,
-      });
+      result = await scanMaterialService(
+        actor,
+        input,
+        savedPhotos.map((saved) => ({
+          loanId: saved.loanId,
+          returnPhotoPath: saved.publicPath,
+          writeGeneration: saved.writeGeneration,
+        })),
+      );
     } catch (error) {
       await cleanupUploadPaths(
-        [savedPhoto.publicPath],
+        savedPhotos.map((saved) => saved.publicPath),
         "material_return_transaction_compensation",
       );
       throw error;
     }
-    revalidateMaterials(result.materialId);
+    for (const materialId of result.relatedMaterialIds) {
+      revalidateMaterials(materialId);
+    }
     return { actorAccountId: actor.accountId, data: result };
   });
 }
