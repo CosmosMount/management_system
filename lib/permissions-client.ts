@@ -155,6 +155,18 @@ export function canUploadApplicantDocs(
   );
 }
 
+/** 报销员处理完成前，采购人可在保存凭证时删除已上传发票。 */
+export function canRemoveApplicantInvoices(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return (
+    (status === "PENDING_APPLICANT_DOCS" || status === "PENDING_FINANCE_REVIEW") &&
+    isOrderInitiator(userOpenId, initiatorOpenId)
+  );
+}
+
 /** 报销审核/待确认阶段：采购人可修改凭证、补充发票，不推进也不回退状态 */
 export function canSupplementApplicantDocs(
   status: OrderStatus,

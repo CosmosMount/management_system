@@ -1,8 +1,9 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, Prisma } from "@prisma/client";
 import { mapOrderItems } from "@/lib/procurement-notification-contract";
 import {
   enqueueOrderNotificationTx,
@@ -14,6 +15,7 @@ import {
   MAX_FILE_SIZE,
   MAX_INVOICE_COUNT,
   saveUpload,
+  publicPathToStoragePath,
   uploadTypeSets,
 } from "@/lib/file-upload";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
@@ -29,7 +31,9 @@ import { serializeFilePaths, resolveInvoicePaths } from "@/lib/order-attachments
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
-import { canSupplementApplicantDocs, canUploadApplicantDocs } from "@/lib/permissions";
+import { canRemoveApplicantInvoices, canSupplementApplicantDocs, canUploadApplicantDocs } from "@/lib/permissions";
+import { createDomainAuditEventTx } from "@/lib/project-management/audit";
+import { logger } from "@/lib/logger";
 import {
   assertListSignaturesReady,
   resolveReimbursementListSignatures,
@@ -68,6 +72,14 @@ export async function uploadApplicantDocs(formData: FormData) {
 
   const orderId = String(formData.get("orderId") ?? "");
   const confirmedRaw = String(formData.get("confirmedItems") ?? "[]");
+  let removedInvoicePaths: string[];
+  try {
+    removedInvoicePaths = [...new Set(z.array(z.string().min(1).max(1024))
+      .max(MAX_INVOICE_COUNT)
+      .parse(JSON.parse(String(formData.get("removedInvoicePaths") ?? "[]"))))];
+  } catch {
+    throw new Error("待删除发票参数无效");
+  }
 
   if (!orderId) {
     throw new Error("参数无效");
@@ -109,6 +121,11 @@ export async function uploadApplicantDocs(formData: FormData) {
   }
 
   const isInitialSubmit = order.status === OrderStatus.PENDING_APPLICANT_DOCS;
+  if (removedInvoicePaths.length > 0 && !canRemoveApplicantInvoices(
+    order.status, session.user.openId, order.initiator.openId,
+  )) {
+    throw new Error("当前状态不允许删除发票");
+  }
 
   if (confirmedItems.length > MAX_REIMBURSEMENT_LIST_ROWS) {
     throw new Error(
@@ -135,10 +152,20 @@ export async function uploadApplicantDocs(formData: FormData) {
     order.invoicePaths,
     order.invoicePath,
   );
-  if (invoices.length === 0 && existingInvoices.length === 0) {
+  for (const filePath of removedInvoicePaths) {
+    const storagePath = publicPathToStoragePath(filePath);
+    if (!existingInvoices.includes(filePath) || !storagePath ||
+      !storagePath.startsWith(`${orderId}/`) || storagePath.includes("\\") || storagePath.includes("\0") ||
+      filePath === order.listDocPath || filePath === order.screenshotPath ||
+      order.items.some((item) => item.photoPath === filePath || item.referenceImagePath === filePath)) {
+      throw new Error("待删除发票不属于当前订单的有效发票，请刷新后重试");
+    }
+  }
+  const retainedInvoices = existingInvoices.filter((filePath) => !removedInvoicePaths.includes(filePath));
+  if (invoices.length === 0 && retainedInvoices.length === 0) {
     throw new Error("请至少上传一张发票");
   }
-  if (existingInvoices.length + invoices.length > MAX_INVOICE_COUNT) {
+  if (retainedInvoices.length + invoices.length > MAX_INVOICE_COUNT) {
     throw new Error(`发票最多上传 ${MAX_INVOICE_COUNT} 张`);
   }
 
@@ -195,7 +222,7 @@ export async function uploadApplicantDocs(formData: FormData) {
       invoicePaths.push(saved);
       newlyUploadedPaths.push(saved);
     }
-    const finalInvoicePaths = [...existingInvoices, ...invoicePaths];
+    const finalInvoicePaths = [...retainedInvoices, ...invoicePaths];
 
     const docItems: ReimbursementDocItem[] = confirmedItems.map((confirmed) => {
       const unitPrice =
@@ -239,6 +266,66 @@ export async function uploadApplicantDocs(formData: FormData) {
 
     await prisma.$transaction(async (tx) => {
       await lockActiveProcurementUserTx(tx, session.user.openId);
+      // 先锁定订单版本，再写明细，避免并发保存把已经删除的发票写回。
+      const locked = await tx.purchaseOrder.updateMany({
+        where: { id: orderId, status: order.status, updatedAt: order.updatedAt, initiatorId: order.initiatorId },
+        data: {
+          totalPrice,
+          invoicePaths: serializeFilePaths(finalInvoicePaths),
+          invoicePath: finalInvoicePaths[0] ?? null,
+          listDocPath,
+          ...(isInitialSubmit
+            ? {
+                status: OrderStatus.PENDING_FINANCE_REVIEW,
+                ...clearProcurementRejectionFields(),
+                ...stepTimerResetFields(),
+              }
+            : {}),
+        },
+      });
+      if (locked.count !== 1) {
+        throw new Error("凭证或订单状态已更新，请刷新后重试");
+      }
+
+      if (removedInvoicePaths.length > 0) {
+        const cleanupAt = new Date();
+        for (const publicPath of removedInvoicePaths) {
+          const storagePath = publicPathToStoragePath(publicPath)!;
+          const asset = await tx.fileAsset.findUnique({ where: { publicPath } });
+          if (asset && (asset.kind !== "ORDER_ATTACHMENT" || asset.orderId !== orderId ||
+            asset.storagePath !== storagePath || asset.cleanupRequestedAt)) {
+            throw new Error("待删除发票资产无效，请刷新后重试");
+          }
+          // 历史单字段发票可能没有资产记录；先登记清理任务，保证提交后可重试。
+          await tx.fileAsset.upsert({
+            where: { publicPath },
+            create: {
+              publicPath, storagePath, kind: "ORDER_ATTACHMENT", orderId,
+              mimeType: "application/octet-stream", size: 0,
+              cleanupRequestedAt: cleanupAt, cleanupNextRunAt: cleanupAt,
+            },
+            update: { cleanupRequestedAt: cleanupAt, cleanupNextRunAt: cleanupAt },
+          });
+        }
+        const actor = await tx.accountIdentity.findFirstOrThrow({
+          where: { provider: "FEISHU", tenantId: "default", openId: session.user.openId },
+          select: { accountId: true, account: { select: { person: { select: { id: true } } } } },
+        });
+        // 保留稳定的发票引用供审计比对，不将下载路径写入审计载荷。
+        const references = (paths: string[]) => paths.map((value) => createHash("sha256").update(value).digest("hex"));
+        await createDomainAuditEventTx(tx, {
+          actorAccountId: actor.accountId,
+          actorPersonId: actor.account.person?.id,
+          action: "procurement.invoices.remove",
+          entityType: "PurchaseOrder", entityId: orderId,
+          before: { status: order.status, invoiceReferences: references(existingInvoices) },
+          after: {
+            status: isInitialSubmit ? OrderStatus.PENDING_FINANCE_REVIEW : order.status,
+            invoiceReferences: references(finalInvoicePaths),
+            removedInvoiceReferences: references(removedInvoicePaths),
+          },
+        });
+      }
       if (deletedItems.length > 0) {
         await tx.purchaseItem.deleteMany({
           where: {
@@ -282,26 +369,6 @@ export async function uploadApplicantDocs(formData: FormData) {
         });
       }
 
-      const locked = await tx.purchaseOrder.updateMany({
-        where: { id: orderId, status: order.status },
-        data: {
-          totalPrice,
-          invoicePaths: serializeFilePaths(finalInvoicePaths),
-          invoicePath: finalInvoicePaths[0] ?? null,
-          listDocPath,
-          ...(isInitialSubmit
-            ? {
-                status: OrderStatus.PENDING_FINANCE_REVIEW,
-                ...clearProcurementRejectionFields(),
-                ...stepTimerResetFields(),
-              }
-            : {}),
-        },
-      });
-      if (locked.count !== 1) {
-        throw new Error("订单状态已更新，请刷新后重试");
-      }
-
       if (!isInitialSubmit || !context) {
         return;
       }
@@ -332,22 +399,31 @@ export async function uploadApplicantDocs(formData: FormData) {
         context,
       );
     });
-    await cleanupUploadPaths(
-      [
-        ...replacedPhotoPaths,
-        ...(previousListDocPath && previousListDocPath !== listDocPath
-          ? [previousListDocPath]
-          : []),
-      ],
-      "applicant_documents_replaced",
-    );
   } catch (err) {
     await cleanupUploadPaths(
       newlyUploadedPaths,
       "applicant_documents_transaction_compensation",
     );
+    logger.error("procurement.applicant_documents.save_failed", {
+      module: "procurement", action: "uploadApplicantDocs",
+      actorOpenId: session.user.openId, entityType: "PurchaseOrder", entityId: orderId, error: err,
+    });
+    if (err instanceof Prisma.PrismaClientKnownRequestError ||
+      err instanceof Prisma.PrismaClientUnknownRequestError ||
+      (err instanceof Error && ("code" in err || "clientVersion" in err))) {
+      throw new Error("凭证保存失败，请稍后重试");
+    }
     throw err;
   }
+  // 提交后清理失败不能补偿删除本次已成功保存的文件。
+  await cleanupUploadPaths(
+    [
+      ...removedInvoicePaths,
+      ...replacedPhotoPaths,
+      ...(previousListDocPath && previousListDocPath !== listDocPath ? [previousListDocPath] : []),
+    ],
+    "applicant_documents_replaced",
+  );
   if (isInitialSubmit) {
     drainNotificationOutboxSoon();
   }

@@ -351,6 +351,8 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 
 ### 上传凭证与报销
 
+发票删除定向回归使用 `npm run test:e2e -- tests/procurement-invoice-removal.spec.ts tests/procurement-notify-approver.spec.ts`，仅通过官方 runner 的隔离 PostgreSQL、受控服务及飞书禁发保护执行。覆盖标记/撤销/取消、保存持久化与审计、1～20 张校验、历史单字段替换、越权与停用、审批后禁止、版本并发冲突、事务回滚、清理重试及旧链接失效；UI 检查桌面 `1440x1000`、窄窗口 `393x851` 和长文件名。完成门禁仍为 `npm run check` 与完整 `npm run test:e2e`，定向通过不能代替完整验收。
+
 1. 审批通过后，申请人上传发票、每行实物照片，并生成验收清单。
 2. 缺失电子签名、发票或实物照片时应显示中文错误。
 3. 报销员上传报销截图。

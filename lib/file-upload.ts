@@ -31,7 +31,7 @@ export {
 } from "@/lib/feedback-upload-limits";
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
-export const MAX_INVOICE_COUNT = 20;
+export { MAX_INVOICE_COUNT } from "@/lib/upload-accept";
 export const UPLOAD_PUBLIC_PREFIX = "/uploads/";
 
 const INVOICE_TYPES = new Set(["application/pdf"]);

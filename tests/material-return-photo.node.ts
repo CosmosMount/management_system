@@ -63,5 +63,6 @@ test("material return photos are never cached after authorization", () => {
     uploadCacheControl("MATERIAL_RETURN_PHOTO"),
     "private, no-store, max-age=0",
   );
-  assert.equal(uploadCacheControl("ORDER_ATTACHMENT"), "private, max-age=3600");
+  assert.equal(uploadCacheControl("ORDER_ATTACHMENT"), "private, no-store, max-age=0");
+  assert.equal(uploadCacheControl("ORDER_ITEM_IMAGE"), "private, max-age=3600");
 });
