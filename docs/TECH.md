@@ -454,6 +454,10 @@ npm run cron                   # 启动定时任务（独立进程）
 - 单文件 20MB；反馈图片单次合计 50MB；Server Actions 总上限 100MB（`next.config.ts` 中 `serverActions.bodySizeLimit`）
 - 访问：浏览器 URL 保持 `/uploads/...`，由 `app/uploads/[...path]/route.ts` 校验登录和 FileAsset 权限后读取
 
+报销凭证保存通过 `removedInvoicePaths` 接收待删除发票路径数组（FormData JSON 字符串，省略视为空数组），服务端只允许在职申请人在 `PENDING_APPLICANT_DOCS` / `PENDING_FINANCE_REVIEW` 删除本订单有效发票。最终列表按旧发票减去删除项、再追加新上传计算，同时写入 `invoicePaths` 与兼容字段 `invoicePath`。所有凭证保存先以读取时的状态和 `updatedAt` 条件更新订单，再写明细，冲突整体回滚。
+
+删除引用、`FileAsset` 清理标记和 `procurement.invoices.remove` 领域审计在同一事务提交；历史单字段发票缺少资产时补登记待清理记录。审计记录操作账号/人员、前后状态及发票路径的 SHA-256 引用，不保存下载路径。提交后复用文件清理和 cron 重试，待清理订单附件在管理员/所有者快捷授权前即拒绝访问。订单附件响应使用 `private, no-store, max-age=0`，避免后续浏览器缓存绕过删除检查；部署前已经缓存或下载的副本无法追溯撤回。单独删除不发送通知，初次提交仍沿用原 outbox 流程。
+
 ### 验收清单自动生成
 
 采购人上传凭证时，系统根据 `templates/material-acceptance-list-base.docx`（由学校官方模板转换）自动填充表格、**电子签名图片**与日期，并按明细行数扩表；有实物照片时嵌入清单末尾照片区。

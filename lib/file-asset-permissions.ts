@@ -78,6 +78,7 @@ export async function canViewFileAsset({
   userOpenId: string;
   roles: UserRoleRecord[];
 }): Promise<boolean> {
+  if (asset.kind === "ORDER_ATTACHMENT" && asset.cleanupRequestedAt) return false;
   if (asset.kind === "MATERIAL_RETURN_PHOTO") {
     if (asset.cleanupRequestedAt) return false;
     const viewer = await prisma.accountIdentity.findFirst({

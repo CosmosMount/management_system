@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import type { UserRoleRecord } from "../lib/permissions-client";
 import {
+  canRemoveApplicantInvoices,
   canNotifyProcurementApprover,
   canSupplementApplicantDocs,
   canUploadApplicantDocs,
@@ -12,6 +13,17 @@ const financeRoles: UserRoleRecord[] = [
   { role: "FINANCE", team: "英雄", techGroup: "" },
 ];
 const scope = { team: "英雄", techGroup: "电控" };
+
+test("只有申请人在报销员处理完成前可删除发票", () => {
+  for (const status of ["PENDING_APPLICANT_DOCS", "PENDING_FINANCE_REVIEW"] as const) {
+    expect(canRemoveApplicantInvoices(status, "owner", "owner")).toBe(true);
+    expect(canRemoveApplicantInvoices(status, "other", "owner")).toBe(false);
+    expect(canRemoveApplicantInvoices(status, undefined, "owner")).toBe(false);
+  }
+  for (const status of ["DRAFT", "MANAGEMENT_REVIEW", "TEACHER_REVIEW", "PENDING_APPLICANT_CONFIRM", "COMPLETED", "REJECTED"] as const) {
+    expect(canRemoveApplicantInvoices(status, "owner", "owner")).toBe(false);
+  }
+});
 
 test("采购人或超级管理员可在待审批环节催促当前审批人", () => {
   expect(

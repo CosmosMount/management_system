@@ -29,6 +29,7 @@ import {
 import {
   IMAGE_UPLOAD_ACCEPT,
   INVOICE_UPLOAD_ACCEPT,
+  MAX_INVOICE_COUNT,
 } from "@/lib/upload-accept";
 import { shouldShowProcurementRejectionNotice } from "@/lib/procurement-rejection";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,7 @@ import type { OrderAttachmentGroups } from "@/lib/order-attachments";
 import {
   canConfirmReimbursement,
   canRequestApplicantResubmit,
+  canRemoveApplicantInvoices,
   canSupplementApplicantDocs,
   canUploadApplicantDocs,
   canUploadFinanceScreenshot,
@@ -133,6 +135,7 @@ export function OrderReimbursementActions({
             orderId={orderId}
             items={items}
             savedInvoices={attachments.invoices}
+            canRemoveInvoices={canRemoveApplicantInvoices(status, userOpenId, initiatorOpenId)}
             mode={showApplicant ? "submit" : "supplement"}
             loading={loading}
             setLoading={setLoading}
@@ -198,6 +201,7 @@ function ApplicantDocsDialog({
   orderId,
   items,
   savedInvoices,
+  canRemoveInvoices,
   mode,
   loading,
   setLoading,
@@ -210,6 +214,7 @@ function ApplicantDocsDialog({
   orderId: string;
   items: PurchaseLineItem[];
   savedInvoices: string[];
+  canRemoveInvoices: boolean;
   mode: "submit" | "supplement";
   loading: boolean;
   setLoading: (v: boolean) => void;
@@ -227,6 +232,8 @@ function ApplicantDocsDialog({
     Record<string, Partial<Record<"name" | "spec" | "quantity" | "photo", string>>>
   >({});
   const [invoiceError, setInvoiceError] = useState("");
+  const [removedInvoicePaths, setRemovedInvoicePaths] = useState<string[]>([]);
+  const retainedInvoiceCount = savedInvoices.filter((filePath) => !removedInvoicePaths.includes(filePath)).length;
   const [listError, setListError] = useState("");
   const hasSavedDocs =
     savedInvoices.length > 0 || items.some((item) => item.photoPath);
@@ -252,8 +259,10 @@ function ApplicantDocsDialog({
     : "凭证已提交，验收清单已自动生成";
 
   function handleOpenChange(nextOpen: boolean) {
+    if (loading) return;
     setOpen(nextOpen);
     if (!nextOpen) return;
+    setRemovedInvoicePaths([]);
     setLineErrors({});
     setInvoiceError("");
     setListError("");
@@ -269,6 +278,7 @@ function ApplicantDocsDialog({
   }
 
   async function handleSubmit() {
+    if (loading) return;
     const form = document.getElementById(
       `applicant-docs-${orderId}`,
     ) as HTMLFormElement | null;
@@ -296,9 +306,11 @@ function ApplicantDocsDialog({
     const invoiceInput = form.querySelector(
       'input[name="invoices"]',
     ) as HTMLInputElement | null;
-    const hasNewInvoices = (invoiceInput?.files?.length ?? 0) > 0;
-    if (!hasNewInvoices && savedInvoices.length === 0) {
+    const newInvoiceCount = invoiceInput?.files?.length ?? 0;
+    if (newInvoiceCount + retainedInvoiceCount === 0) {
       nextInvoiceError = "请至少上传一张发票";
+    } else if (newInvoiceCount + retainedInvoiceCount > MAX_INVOICE_COUNT) {
+      nextInvoiceError = `发票最多上传 ${MAX_INVOICE_COUNT} 张`;
     }
 
     const existingById = new Map(items.map((item) => [item.id, item]));
@@ -339,6 +351,7 @@ function ApplicantDocsDialog({
       const formData = new FormData(form);
       formData.set("orderId", orderId);
       formData.set("confirmedItems", JSON.stringify(confirmedItems));
+      formData.set("removedInvoicePaths", JSON.stringify(removedInvoicePaths));
       await uploadApplicantDocs(formData);
       toast.success(successMessage);
       setOpen(false);
@@ -447,20 +460,46 @@ function ApplicantDocsDialog({
             </Label>
             {savedInvoices.length > 0 ? (
               <ul className="space-y-1 rounded-md border bg-muted/30 p-2">
-                {savedInvoices.map((filePath) => (
-                  <li key={filePath}>
-                    <AttachmentFileLink filePath={filePath} />
-                  </li>
-                ))}
+                {savedInvoices.map((filePath, index) => {
+                  const removed = removedInvoicePaths.includes(filePath);
+                  return (
+                    <li key={filePath} className="flex min-w-0 flex-wrap items-center gap-2" data-testid="saved-invoice">
+                      <div className={`min-w-0 flex-1 [overflow-wrap:anywhere] ${removed ? "opacity-60 line-through" : ""}`}>
+                        <AttachmentFileLink filePath={filePath} />
+                      </div>
+                      {removed && <span className="text-xs text-muted-foreground">待删除</span>}
+                      {canRemoveInvoices && (
+                        <Button
+                          type="button" size="sm" variant="outline" disabled={loading}
+                          aria-label={`${removed ? "撤销删除" : "删除"}第 ${index + 1} 张发票`}
+                          onClick={() => {
+                            setRemovedInvoicePaths((current) => removed
+                              ? current.filter((value) => value !== filePath)
+                              : [...current, filePath]);
+                            setInvoiceError("");
+                          }}
+                        >
+                          {removed ? "撤销删除" : "删除"}
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             ) : null}
+            {canRemoveInvoices && savedInvoices.length > 0 && (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                保留 {retainedInvoiceCount} 张已上传发票，{removedInvoicePaths.length} 张待删除。删除在保存后生效，保存前可撤销；最终至少保留一张发票。
+              </p>
+            )}
             <Input
               id={`invoices-${orderId}`}
               name="invoices"
               type="file"
               accept={INVOICE_UPLOAD_ACCEPT}
               multiple
-              required={savedInvoices.length === 0}
+              required={retainedInvoiceCount === 0}
+              disabled={loading}
               aria-invalid={Boolean(invoiceError)}
               aria-describedby={invoiceError ? `invoices-${orderId}-error` : undefined}
               onChange={() => setInvoiceError("")}

@@ -99,6 +99,7 @@ export {
   canRejectProcurement,
   canRejectProcurementOrder,
   canRequestApplicantResubmit,
+  canRemoveApplicantInvoices,
   canSupplementApplicantDocs,
   canUploadApplicantDocs,
   canUploadFinanceScreenshot,
