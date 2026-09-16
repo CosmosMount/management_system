@@ -3,9 +3,10 @@ import { saveItemReferenceImage } from "@/lib/file-upload";
 import { itemKindNeedsImage } from "@/lib/purchase-item-kind";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import { prisma } from "@/lib/prisma";
+import { MAX_ITEM_REFERENCE_IMAGE_COUNT } from "@/lib/upload-accept";
 
 export type PreparedItemReferenceImages = {
-  referenceImagePaths: Array<string | null>;
+  referenceImagePaths: string[][];
   stagedUploadPaths: string[];
 };
 
@@ -21,26 +22,37 @@ export async function prepareItemReferenceImages({
 }: {
   orderId: string;
   itemKinds: PurchaseItemKind[];
-  itemImages: Map<number, File>;
-  existingPaths?: Array<string | null | undefined>;
+  itemImages: Map<number, File[]>;
+  existingPaths?: string[][];
 }): Promise<PreparedItemReferenceImages> {
-  const referenceImagePaths: Array<string | null> = [];
+  const referenceImagePaths: string[][] = [];
   const stagedUploadPaths: string[] = [];
   try {
     for (const [index, itemKind] of itemKinds.entries()) {
       if (!itemKindNeedsImage(itemKind)) {
-        referenceImagePaths.push(null);
+        referenceImagePaths.push([]);
         continue;
       }
-      const uploaded = itemImages.get(index);
-      const referenceImagePath = uploaded
-        ? await saveItemReferenceImage(orderId, index, uploaded)
-        : (existingPaths?.[index] ?? null);
-      if (!referenceImagePath) {
+      const retainedPaths = existingPaths?.[index] ?? [];
+      const uploadedFiles = itemImages.get(index) ?? [];
+      if (retainedPaths.length + uploadedFiles.length > MAX_ITEM_REFERENCE_IMAGE_COUNT) {
+        throw new Error(`加工费参考图片最多 ${MAX_ITEM_REFERENCE_IMAGE_COUNT} 张`);
+      }
+      const itemPaths = [...retainedPaths];
+      for (const [uploadIndex, uploadedFile] of uploadedFiles.entries()) {
+        const referenceImagePath = await saveItemReferenceImage(
+          orderId,
+          index,
+          retainedPaths.length + uploadIndex,
+          uploadedFile,
+        );
+        stagedUploadPaths.push(referenceImagePath);
+        itemPaths.push(referenceImagePath);
+      }
+      if (itemPaths.length === 0) {
         throw new Error("加工费须上传对应图片");
       }
-      if (uploaded) stagedUploadPaths.push(referenceImagePath);
-      referenceImagePaths.push(referenceImagePath);
+      referenceImagePaths.push(itemPaths);
     }
     return { referenceImagePaths, stagedUploadPaths };
   } catch (error) {

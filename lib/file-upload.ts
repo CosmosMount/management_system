@@ -104,13 +104,20 @@ export function publicPathToAbsolute(publicPath: string): string {
 
 export async function saveItemReferenceImage(
   orderId: string,
-  index: number,
+  itemIndex: number,
+  imageIndex: number,
   file: File,
 ): Promise<string> {
-  return saveUpload(orderId, file, `item-ref-${index}`, uploadTypeSets.itemPhoto, {
-    kind: "ORDER_ITEM_IMAGE",
+  return saveUpload(
     orderId,
-  });
+    file,
+    `item-ref-${itemIndex}-${imageIndex}`,
+    uploadTypeSets.itemPhoto,
+    {
+      kind: "ORDER_ITEM_IMAGE",
+      orderId,
+    },
+  );
 }
 
 export async function saveGeneratedOrderAttachment(

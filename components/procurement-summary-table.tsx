@@ -248,6 +248,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
                       itemKind={row.itemKind}
                       purchaseLink={row.purchaseLink}
                       referenceImagePath={row.referenceImagePath}
+                      referenceImagePaths={row.referenceImagePaths}
                     />
                   </TableCell>
                   <TableCell className="text-right">{row.quantity}</TableCell>

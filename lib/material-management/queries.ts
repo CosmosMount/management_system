@@ -23,6 +23,7 @@ const activeLoanSelect = {
 
 export type MaterialListItem = {
   id: string;
+  qrToken: string;
   name: string;
   price: string;
   techGroup: string;
@@ -66,6 +67,7 @@ export async function listMaterials(input: unknown) {
         take: 101,
         select: {
           id: true,
+          qrToken: true,
           name: true,
           price: true,
           techGroup: true,
@@ -215,6 +217,7 @@ export async function getMaterialByQrToken(qrToken: unknown) {
 
 function serializeListItem(row: {
   id: string;
+  qrToken: string;
   name: string;
   price: { toFixed(digits: number): string };
   techGroup: string;
@@ -232,6 +235,7 @@ function serializeListItem(row: {
   const activeLoan = row.loans[0];
   return {
     id: row.id,
+    qrToken: row.qrToken,
     name: row.name,
     price: row.price.toFixed(2),
     techGroup: row.techGroup,

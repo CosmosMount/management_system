@@ -154,12 +154,12 @@ Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在�
 | `User` | 采购报销资料，通过 `accountId` 关联统一账号 |
 | `UserRole` | 报销角色分配、范围及授予/撤销历史 |
 | `PurchaseOrder` | 采购主单 |
-| `PurchaseItem` | 明细（含购买链接） |
+| `PurchaseItem` | 明细（含购买链接，以及加工费参考图片路径集合与旧单图兼容字段） |
 | `ProcurementBudgetPool` | 采购预算池存储行：项目（description）+兵种组+兼容技术方向+周期唯一；业务读取按兵种组+周期汇总，技术方向仅兼容历史数据 |
 
-**采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片。
+**采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片；每条加工费明细最多保留 9 张参考图，单次新增图片总量不超过 50MB。
 
-新建采购申请会先使用预分配的订单 ID 安全写入全部图片；文件准备完成后，订单、明细、最终状态与提交 outbox 才在单一事务中创建。草稿更新同样先完整暂存新图片，再以页面读取到的 `updatedAt` 做乐观版本校验，并在单一事务替换订单与明细；沿用旧图片时服务端要求路径来自当前订单现有明细，且对应 `FileAsset` 的 `orderId/kind` 匹配。文件准备阶段不会暴露中间业务状态，第二张文件失败或数据库事务失败时会清理本次暂存文件，成功后再补偿清理被替换图片。MIME 内容识别位于 `upload-mime.ts`，原子文件替换、资产登记及失败恢复位于 `upload-asset-writer.ts`，`file-upload.ts` 只保留领域上传包装和稳定公共入口。通用上传补偿会执行两次即时幂等清理；持续失败时在 `FileAsset.cleanupRequestedAt/cleanupNextRunAt` 留下持久化任务，由 cron 每 10 分钟继续重试，避免事务失败、附件替换、管理员删除或生成文档注册失败后静默遗留文件。同一任务还会处理超过一小时的 `.tmp-*`/`.bak-*`：临时文件删除，备份在主文件缺失时恢复、主文件存在时清理。签名等固定路径资产覆盖注册失败时不会复用删除资产任务，而是把失败的新文件隔离为 `.tmp-cleanup-*`，通过绑定原 `FileAsset.writeGeneration` 的 `.restore-bak-*` 标记即时或由 cron 恢复旧文件，并保留原权限元数据；后续成功覆盖会推进写入代次，使旧恢复标记只能清理、不能回滚新文件。
+新建采购申请会先使用预分配的订单 ID 安全写入全部图片；文件准备完成后，订单、明细、最终状态与提交 outbox 才在单一事务中创建。`PurchaseItem.referenceImagePaths` 以 JSON 数组保存有序多图路径，迁移会把非空旧 `referenceImagePath` 回填为单元素数组；读取仍使用旧字段回退，新写入同步首图到旧字段以兼容既有消费者。草稿更新同样先完整暂存新图片，再以页面读取到的 `updatedAt` 做乐观版本校验，并在单一事务替换订单与明细；沿用旧图片时服务端要求每条提交路径来自当前订单现有明细，且对应 `FileAsset` 的 `orderId/kind` 匹配。文件准备阶段不会暴露中间业务状态，同一条目第二张文件失败或数据库事务失败时会清理本次暂存文件，成功后再补偿清理被移除或替换的图片。MIME 内容识别位于 `upload-mime.ts`，原子文件替换、资产登记及失败恢复位于 `upload-asset-writer.ts`，`file-upload.ts` 只保留领域上传包装和稳定公共入口。通用上传补偿会执行两次即时幂等清理；持续失败时在 `FileAsset.cleanupRequestedAt/cleanupNextRunAt` 留下持久化任务，由 cron 每 10 分钟继续重试，避免事务失败、附件替换、管理员删除或生成文档注册失败后静默遗留文件。同一任务还会处理超过一小时的 `.tmp-*`/`.bak-*`：临时文件删除，备份在主文件缺失时恢复、主文件存在时清理。签名等固定路径资产覆盖注册失败时不会复用删除资产任务，而是把失败的新文件隔离为 `.tmp-cleanup-*`，通过绑定原 `FileAsset.writeGeneration` 的 `.restore-bak-*` 标记即时或由 cron 恢复旧文件，并保留原权限元数据；后续成功覆盖会推进写入代次，使旧恢复标记只能清理、不能回滚新文件。
 
 **预算池**（`lib/procurement-budget.ts`、`lib/procurement-budget-alerts.ts`）：
 

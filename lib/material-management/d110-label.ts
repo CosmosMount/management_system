@@ -130,3 +130,77 @@ export async function runD110PrintSequence<T>(
   if (primaryError !== undefined) throw primaryError;
   if (!ended) throw new Error("PRINT_END_REJECTED");
 }
+
+export async function runD110MultiPagePrintSequence<T>(
+  task: {
+    printInit(): Promise<void>;
+    printPage(image: T, quantity?: number): Promise<void>;
+    waitForPageFinished(): Promise<void>;
+    waitForFinished(): Promise<void>;
+    printEnd(): Promise<boolean>;
+  },
+  images: readonly T[],
+  onProgress?: (completed: number, total: number) => void,
+  shouldContinue?: () => boolean,
+): Promise<void> {
+  let primaryError: unknown;
+  try {
+    await task.printInit();
+    for (const [index, image] of images.entries()) {
+      if (shouldContinue && !shouldContinue()) break;
+      await task.printPage(image, 1);
+      await task.waitForPageFinished();
+      onProgress?.(index + 1, images.length);
+    }
+    if (!shouldContinue || shouldContinue()) await task.waitForFinished();
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let ended = false;
+  try {
+    ended = await task.printEnd();
+  } catch (error) {
+    if (primaryError === undefined) primaryError = error;
+  }
+  if (primaryError !== undefined) throw primaryError;
+  if (!ended) throw new Error("PRINT_END_REJECTED");
+}
+
+export async function runD110BatchPrint<T>(
+  items: readonly T[],
+  printItem: (item: T, index: number) => Promise<void>,
+  onProgress?: (completed: number, total: number, item: T) => void,
+  shouldContinue?: () => boolean,
+): Promise<void> {
+  for (const [index, item] of items.entries()) {
+    if (shouldContinue && !shouldContinue()) return;
+    await printItem(item, index);
+    onProgress?.(index + 1, items.length, item);
+  }
+}
+
+export async function runD110BatchPrintSession<TClient, TItem>(input: {
+  items: readonly TItem[];
+  connect: () => Promise<TClient>;
+  disconnect: (client: TClient) => Promise<void>;
+  printItem: (client: TClient, item: TItem, index: number) => Promise<void>;
+  isActive: () => boolean;
+  onConnected?: (client: TClient) => void;
+  onProgress?: (completed: number, total: number, item: TItem) => void;
+}): Promise<"COMPLETED" | "CANCELLED"> {
+  const client = await input.connect();
+  input.onConnected?.(client);
+  try {
+    if (!input.isActive()) return "CANCELLED";
+    await runD110BatchPrint(
+      input.items,
+      (item, index) => input.printItem(client, item, index),
+      input.onProgress,
+      input.isActive,
+    );
+    return input.isActive() ? "COMPLETED" : "CANCELLED";
+  } finally {
+    await input.disconnect(client);
+  }
+}

@@ -152,7 +152,7 @@ function rawToItemInput(raw: RawRow): PurchaseItemInput | null {
     spec: raw.spec.trim(),
     itemKind,
     purchaseLink: raw.purchaseLink?.trim() ?? "",
-    referenceImagePath: null,
+    referenceImagePaths: [],
     processingVendor: raw.processingVendor?.trim() ?? "",
     quantity,
     lineTotal,

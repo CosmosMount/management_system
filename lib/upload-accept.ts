@@ -3,3 +3,6 @@ export const IMAGE_UPLOAD_ACCEPT =
 
 export const INVOICE_UPLOAD_ACCEPT = "application/pdf,.pdf";
 export const MAX_INVOICE_COUNT = 20;
+export const MAX_ITEM_REFERENCE_IMAGE_COUNT = 9;
+export const MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE = 50 * 1024 * 1024;
+export const ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL = "50MB";

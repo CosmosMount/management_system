@@ -88,6 +88,7 @@ async function parseItemsFixture(file: File): Promise<ImportProcurementItemsResu
         spec: "测试规格",
         itemKind: "COMPONENT",
         purchaseLink: "https://example.com",
+        referenceImagePaths: [],
         processingVendor: "",
         quantity: 1,
         lineTotal: 1,

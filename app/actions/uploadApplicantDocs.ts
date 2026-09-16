@@ -28,6 +28,7 @@ import {
   type ReimbursementDocItem,
 } from "@/lib/generate-reimbursement-docx";
 import { serializeFilePaths, resolveInvoicePaths } from "@/lib/order-attachments";
+import { resolveItemReferenceImagePaths } from "@/lib/purchase-item-images";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
@@ -157,7 +158,14 @@ export async function uploadApplicantDocs(formData: FormData) {
     if (!existingInvoices.includes(filePath) || !storagePath ||
       !storagePath.startsWith(`${orderId}/`) || storagePath.includes("\\") || storagePath.includes("\0") ||
       filePath === order.listDocPath || filePath === order.screenshotPath ||
-      order.items.some((item) => item.photoPath === filePath || item.referenceImagePath === filePath)) {
+      order.items.some(
+        (item) =>
+          item.photoPath === filePath ||
+          resolveItemReferenceImagePaths(
+            item.referenceImagePaths,
+            item.referenceImagePath,
+          ).includes(filePath),
+      )) {
       throw new Error("待删除发票不属于当前订单的有效发票，请刷新后重试");
     }
   }

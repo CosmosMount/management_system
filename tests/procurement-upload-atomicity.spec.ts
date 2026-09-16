@@ -29,10 +29,12 @@ import {
   assertExistingItemImagesBelongToOrder,
   prepareItemReferenceImages,
 } from "../lib/order-item-images";
+import { resolveItemReferenceImagePaths } from "../lib/purchase-item-images";
 import { saveGeneratedListDoc } from "../lib/generate-reimbursement-docx";
 import { createRecoveryBackupPath } from "../lib/upload-recovery-marker";
 import {
   ensureFallbackAdminFixture,
+  expectNoHorizontalOverflow,
   loginAsAdminUser,
   loginAsNormalUser,
   resolveNormalAuthMaterial,
@@ -102,17 +104,24 @@ test("订单明细图片只允许沿用当前订单的 ORDER_ITEM_IMAGE 资产",
   }
 });
 
-test("多图暂存第二张失败时清理第一张且不留下资产", async () => {
+test("同一加工件暂存第二张图片失败时清理第一张且不留下资产", async () => {
   const orderId = `staging-${randomUUID()}`;
   const valid = pngUpload("valid.png");
-  const files = new Map<number, File>([
-    [0, new File([valid.buffer], valid.name, { type: valid.mimeType })],
-    [1, new File([Buffer.from("not-an-image")], "invalid.png", { type: "image/png" })],
+  const files = new Map<number, File[]>([
+    [
+      0,
+      [
+        new File([valid.buffer], valid.name, { type: valid.mimeType }),
+        new File([Buffer.from("not-an-image")], "invalid.png", {
+          type: "image/png",
+        }),
+      ],
+    ],
   ]);
   await expect(
     prepareItemReferenceImages({
       orderId,
-      itemKinds: ["PROCESSING_FEE", "PROCESSING_FEE"],
+      itemKinds: ["PROCESSING_FEE"],
       itemImages: files,
     }),
   ).rejects.toThrow("文件内容");
@@ -122,6 +131,99 @@ test("多图暂存第二张失败时清理第一张且不留下资产", async ()
   await expect(listStoredFiles(storagePathToAbsolute(orderId))).resolves.toEqual(
     [],
   );
+});
+
+test("加工费申请可提交多张参考图片并在详情完整展示", async ({
+  page,
+  context,
+  baseURL,
+}, testInfo) => {
+  const suffix = randomUUID().replaceAll("-", "");
+  const marker = `PW加工件多图-${testInfo.project.name}-${suffix}`;
+  const vendorName = `PW多图加工商-${suffix}`;
+  const auth = await resolveNormalAuthMaterial();
+  const originalUser = await prisma.user.findUnique({
+    where: { openId: auth.openId },
+    select: { signaturePath: true },
+  });
+  let orderId: string | undefined;
+  let imagePaths: string[] = [];
+
+  await prisma.processingVendor.create({ data: { name: vendorName } });
+  try {
+    if (originalUser) {
+      await prisma.user.update({
+        where: { openId: auth.openId },
+        data: {
+          signaturePath:
+            originalUser.signaturePath ??
+            "/uploads/playwright/multi-image-signature.png",
+        },
+      });
+    } else {
+      const identity = await resolveFeishuIdentityForUser({
+        openId: auth.openId,
+        name: auth.name,
+      });
+      await prisma.user.update({
+        where: { openId: auth.openId },
+        data: {
+          accountId: identity.account.id,
+          name: auth.name,
+          signaturePath: "/uploads/playwright/multi-image-signature.png",
+        },
+      });
+    }
+    await loginAsNormalUser(context, baseURL, auth);
+    await fillProcessingFeeApplication(page, marker, vendorName, [
+      pngUpload("processing-front.png"),
+      pngUpload("processing-back.png"),
+    ]);
+    await expect(page.getByLabel("已选择 2 张参考图片")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 393, height: 851 });
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole("button", { name: "保存草稿" }).click();
+    await expect(page).toHaveURL(/\/procurement\/(?!new$)[^/?#]+$/);
+
+    const item = await prisma.purchaseItem.findFirstOrThrow({
+      where: { name: marker },
+      include: { order: { select: { id: true } } },
+    });
+    orderId = item.order.id;
+    imagePaths = resolveItemReferenceImagePaths(
+      item.referenceImagePaths,
+      item.referenceImagePath,
+    );
+    expect(imagePaths).toHaveLength(2);
+    expect(item.referenceImagePath).toBe(imagePaths[0]);
+    await expect(
+      prisma.fileAsset.count({
+        where: {
+          orderId,
+          kind: "ORDER_ITEM_IMAGE",
+          publicPath: { in: imagePaths },
+        },
+      }),
+    ).resolves.toBe(2);
+    await expect(page.getByLabel("参考图片（2 张）")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 393, height: 851 });
+    await expectNoHorizontalOverflow(page);
+  } finally {
+    await cleanupUploadPaths(imagePaths, "processing_multi_image_test_cleanup");
+    if (orderId) {
+      await prisma.purchaseOrder.deleteMany({ where: { id: orderId } });
+    }
+    if (originalUser) {
+      await prisma.user.updateMany({
+        where: { openId: auth.openId },
+        data: { signaturePath: originalUser.signaturePath },
+      });
+    }
+    await prisma.processingVendor.deleteMany({ where: { name: vendorName } });
+  }
 });
 
 test("生成清单资产注册失败时不会留下未登记普通文件", async () => {
@@ -869,6 +971,7 @@ async function fillProcessingFeeApplication(
   page: Page,
   marker: string,
   vendorName: string,
+  referenceImages = [pngUpload("order-atomicity.png")],
 ) {
   await page.goto("/procurement/new", { waitUntil: "networkidle" });
   await page.getByLabel("车组").click();
@@ -881,9 +984,7 @@ async function fillProcessingFeeApplication(
   await page.getByRole("option", { name: "加工费" }).click();
   await page.getByLabel("加工商").click();
   await page.getByRole("option", { name: vendorName }).click();
-  await page.getByLabel("参考图片").setInputFiles([
-    pngUpload("order-atomicity.png"),
-  ]);
+  await page.getByLabel(/参考图片/).setInputFiles(referenceImages);
   await page.getByLabel("行总价").fill("42");
 }
 

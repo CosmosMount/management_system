@@ -21,6 +21,7 @@ import {
   fitD110LabelLines,
   isD110PrinterModel,
   resolveD110PrintTaskName,
+  runD110MultiPagePrintSequence,
   runD110PrintSequence,
   type D110LabelContent,
 } from "@/lib/material-management/d110-label";
@@ -124,7 +125,7 @@ export function D110SerialPrinter(props: D110LabelContent) {
   );
 }
 
-async function connectD110(
+export async function connectD110(
   existingClient: NiimbotSerialClient | null,
 ): Promise<NiimbotSerialClient> {
   if (existingClient?.isConnected()) return existingClient;
@@ -139,7 +140,7 @@ async function connectD110(
   return client;
 }
 
-async function printD110MaterialLabel(
+export async function printD110MaterialLabel(
   client: NiimbotSerialClient,
   content: D110LabelContent,
 ): Promise<void> {
@@ -162,6 +163,54 @@ async function printD110MaterialLabel(
   });
 
   await runD110PrintSequence(task, encoded);
+}
+
+export async function printD110MaterialLabels(
+  client: NiimbotSerialClient,
+  contents: readonly D110LabelContent[],
+  onProgress?: (
+    completed: number,
+    total: number,
+    content: D110LabelContent,
+  ) => void,
+  shouldContinue?: () => boolean,
+): Promise<void> {
+  if (contents.length === 0) return;
+  const encodedLabels = [];
+  for (const content of contents) {
+    if (shouldContinue && !shouldContinue()) return;
+    const canvas = await renderD110Label(content);
+    encodedLabels.push(
+      ImageEncoder.encodeCanvas(
+        canvas,
+        PageColorType.SingleColor,
+        D110_PRINT_DIRECTION,
+      ),
+    );
+  }
+  if (shouldContinue && !shouldContinue()) return;
+
+  const taskName = resolveD110PrintTaskName(
+    client.getModelMetadata()?.model,
+    client.getPrintTaskType(),
+  );
+  if (!taskName) throw new Error("UNSUPPORTED_PROTOCOL");
+  const task = client.abstraction.newPrintTask(taskName, {
+    density: 2,
+    labelType: LabelType.WithGaps,
+    pageColor: PageColorType.SingleColor,
+    totalPages: encodedLabels.length,
+  });
+
+  await runD110MultiPagePrintSequence(
+    task,
+    encodedLabels,
+    (completed, total) => {
+      const content = contents[completed - 1];
+      if (content) onProgress?.(completed, total, content);
+    },
+    shouldContinue,
+  );
 }
 
 async function renderD110Label(

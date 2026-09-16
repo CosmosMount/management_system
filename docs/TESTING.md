@@ -327,7 +327,7 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 ## 采购模块测试
 
 1. `tests/procurement-shell.spec.ts` 在 Desktop 验证 `/procurement` 重定向到看板、四项侧栏导航、折叠与展开焦点、订单详情归属“订单列表”；四个导航面板和确定性草稿订单的详情、编辑页还会断言顶部为“采购管理”上下文命令栏、标题正确、不存在返回链接，并检查无横向溢出和浏览器异常；详情页另验证状态与可用操作位于命令栏。该用例验证导航中不存在“工坊加工费”，`tests/functional-panels.spec.ts` 另验证旧 `/procurement/workshop-fee` 返回 404。`tests/inactive-person-procurement-safety.spec.ts` 验证停用账号的侧栏隐藏“新建申请”、直达写入路由被重定向或返回 404、历史草稿可读且无继续编辑、提交、上传、确认或催办入口。
-   `tests/functional-panels.spec.ts` 还会创建 `isWorkshopFee=true` 的已完成历史订单，验证普通用户仍能从列表展开明细并进入详情，看到工坊徽标、加工费种类和加工商；页面只读访问前后订单及明细记录必须完全不变。
+   `tests/functional-panels.spec.ts` 还会创建 `isWorkshopFee=true` 的已完成历史订单，验证普通用户仍能从列表展开明细并进入详情，看到工坊徽标、加工费种类和加工商；页面只读访问前后订单及明细记录必须完全不变。`tests/procurement-upload-atomicity.spec.ts` 覆盖同一加工费条目多图提交、持久化和详情展示，以及第二张图片内容校验失败时整批补偿清理；`tests/procurement-item-images.node.ts` 锁定旧单图回退、表单多文件解析、图片必填、去重及数量上限。`tests/procurement-item-images-migration.spec.ts` 仅在官方 runner 的本机随机 `_test`/shadow 数据库中从前置迁移链写入旧单图记录，验证多图回填、重复部署与两种 schema drift。
 2. `tests/procurement-pending-orders.spec.ts` 验证 `/procurement/pending` 的当前处理人过滤、待办和最近订单；`tests/procurement-budget-pool-dashboard.spec.ts` 验证新 Excel 无技术方向列、同兵种组聚合历史预算行、看板一组一栏及项目说明。
 
 ### 新建申请与草稿

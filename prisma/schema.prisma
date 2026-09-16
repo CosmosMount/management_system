@@ -487,6 +487,7 @@ model PurchaseItem {
   itemKind           PurchaseItemKind @default(COMPONENT)
   purchaseLink       String           @default("")
   referenceImagePath String?
+  referenceImagePaths String          @default("[]")
   processingVendor   String           @default("")
   quantity           Int
   unitPrice          Float

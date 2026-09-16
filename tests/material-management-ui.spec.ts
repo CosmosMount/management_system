@@ -177,6 +177,54 @@ test.describe("material management UI", () => {
     expect(browserErrors).toEqual([]);
   });
 
+  test("selects visible materials for batch label printing at desktop and narrow widths", async ({ context, page, baseURL }) => {
+    const suffix = randomUUID();
+    const openId = `ou_material_batch_print_${suffix}`;
+    const displayName = `批量打印用户 ${suffix.slice(0, 8)}`;
+    const identity = await resolveFeishuIdentityForUser({
+      openId,
+      unionId: null,
+      name: displayName,
+    });
+    await prisma.person.update({
+      where: { id: identity.person.id },
+      data: { status: "ACTIVE" },
+    });
+    await prisma.material.createMany({
+      data: [1, 2, 3].map((index) => ({
+        name: `批量打印物资-${suffix}-${index}`,
+        price: "25.50",
+        techGroup: "硬件",
+        registrationKey: randomUUID(),
+        createdByAccountId: identity.account.id,
+      })),
+    });
+    await loginAsTestUser(context, baseURL, { openId, name: displayName });
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(`/materials?q=${encodeURIComponent(`批量打印物资-${suffix}`)}`);
+      const checkboxes = page.getByRole("checkbox", { name: /选择打印 批量打印物资-/ });
+      await expect(checkboxes).toHaveCount(3);
+      await expect(page.getByRole("button", { name: "打印所选（0）" })).toBeDisabled();
+
+      await checkboxes.first().check();
+      await expect(page.getByRole("button", { name: "打印所选（1）" })).toBeEnabled();
+      await page.getByRole("button", { name: "全选当前结果" }).click();
+      for (const checkbox of await checkboxes.all()) await expect(checkbox).toBeChecked();
+      await expect(page.getByRole("button", { name: "打印所选（3）" })).toBeEnabled();
+
+      await page.getByRole("button", { name: "清空选择" }).click();
+      for (const checkbox of await checkboxes.all()) await expect(checkbox).not.toBeChecked();
+      await expect(page.getByRole("button", { name: "打印所选（0）" })).toBeDisabled();
+      await expectHealthyPage(page);
+    }
+
+    expect(browserErrors).toEqual([]);
+  });
+
   test("users register a material and scan its stable QR to check out and return on desktop and mobile", async ({
     context,
     page,

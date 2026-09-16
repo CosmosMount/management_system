@@ -34,10 +34,10 @@ export function ProcurementOrderActionFixtureClient({
           const submittedItems = items.map((item, index) => ({
             ...item,
             name: index === 0 ? `${item.name}-已更新` : item.name,
-            referenceImagePath:
+            referenceImagePaths:
               mode === "foreign" && index === 0
-                ? foreignPath
-                : item.referenceImagePath,
+                ? (foreignPath ? [foreignPath] : [])
+                : item.referenceImagePaths,
           }));
           const formData = new FormData();
           formData.set(
@@ -52,11 +52,11 @@ export function ProcurementOrderActionFixtureClient({
             }),
           );
           if (mode === "stale-upload" || mode === "two-upload") {
-            formData.set("itemImage-0", pngFile("valid.png"));
+            formData.set("itemImage-0-0", pngFile("valid.png"));
           }
           if (mode === "two-upload") {
             formData.set(
-              "itemImage-1",
+              "itemImage-1-0",
               new File(["not-an-image"], "invalid.png", { type: "image/png" }),
             );
           }
