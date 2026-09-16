@@ -4,12 +4,18 @@ import {
   resolveItemReferenceImagePaths,
   serializeItemReferenceImagePaths,
 } from "../lib/purchase-item-images";
+import { toProcurementBomSheetRow } from "../lib/export-procurement-bom";
 import {
   assertItemImagesPresent,
   parseOrderFormData,
   purchaseItemSchema,
 } from "../lib/validations/order";
-import { MAX_ITEM_REFERENCE_IMAGE_COUNT } from "../lib/upload-accept";
+import {
+  MAX_ITEM_REFERENCE_IMAGE_COUNT,
+  MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE,
+} from "../lib/upload-accept";
+
+const MAX_INDIVIDUAL_IMAGE_SIZE = 20 * 1024 * 1024;
 
 function processingItem(referenceImagePaths: string[] = []) {
   return purchaseItemSchema.parse({
@@ -83,6 +89,79 @@ test("加工费图片必填且服务端限制每条明细的图片数量", () =>
       ),
     /最多 9 张/,
   );
+});
+
+test("加工费图片服务端拒绝单次新增总大小超过 50MB", () => {
+  const maxSized = new File(
+    [new Uint8Array(MAX_INDIVIDUAL_IMAGE_SIZE)],
+    "max-sized.png",
+    { type: "image/png" },
+  );
+  const exactRemainderSize =
+    MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE - MAX_INDIVIDUAL_IMAGE_SIZE * 2;
+  const exactRemainder = new File(
+    [new Uint8Array(exactRemainderSize)],
+    "exact-remainder.png",
+    { type: "image/png" },
+  );
+  const overRemainder = new File(
+    [new Uint8Array(exactRemainderSize + 1)],
+    "over-remainder.png",
+    { type: "image/png" },
+  );
+  const exactLimitFiles = [maxSized, maxSized, exactRemainder];
+  const overLimitFiles = [maxSized, maxSized, overRemainder];
+
+  assert.ok(
+    overLimitFiles.every(
+      (file) => file.size <= MAX_INDIVIDUAL_IMAGE_SIZE,
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertItemImagesPresent(
+      [processingItem()],
+      new Map([[0, exactLimitFiles]]),
+    ),
+  );
+
+  assert.throws(
+    () =>
+      assertItemImagesPresent(
+        [processingItem()],
+        new Map([[0, overLimitFiles]]),
+      ),
+    /总大小不能超过 50MB/,
+  );
+});
+
+test("采购 BOM 导出把加工件全部参考图片写入同一单元格", () => {
+  const imagePaths = [
+    "/uploads/order/front.png",
+    "/uploads/order/back.png",
+    "/uploads/order/side.png",
+  ];
+  const sheetRow = toProcurementBomSheetRow({
+    orderId: "order-1",
+    orderNo: "CG-001",
+    initiatorName: "测试用户",
+    team: "英雄",
+    techGroup: "电控",
+    status: "DRAFT",
+    itemName: "测试加工件",
+    spec: "A-01",
+    itemKind: "PROCESSING_FEE",
+    purchaseLink: "",
+    referenceImagePath: imagePaths[0],
+    referenceImagePaths: serializeItemReferenceImagePaths(imagePaths),
+    processingVendor: "测试加工商",
+    quantity: 1,
+    unitPrice: 10,
+    lineTotal: 10,
+    orderTotal: 10,
+    createdAt: "2026-09-16T00:00:00.000Z",
+  });
+
+  assert.equal(sheetRow["链接/图片"], imagePaths.join("\n"));
 });
 
 test("采购明细校验拒绝重复的既有图片路径", () => {

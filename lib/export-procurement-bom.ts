@@ -19,7 +19,7 @@ function formatReference(row: SummaryRow): string {
   ).join("\n");
 }
 
-function toSheetRow(row: SummaryRow) {
+export function toProcurementBomSheetRow(row: SummaryRow) {
   return {
     车组: row.team,
     技术组: row.techGroup,
@@ -63,7 +63,7 @@ export function filterBomRowsByTeam(
 }
 
 function downloadRowsAsXlsx(rows: SummaryRow[], filename: string) {
-  const sheet = XLSX.utils.json_to_sheet(rows.map(toSheetRow));
+  const sheet = XLSX.utils.json_to_sheet(rows.map(toProcurementBomSheetRow));
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "BOM");
   XLSX.writeFile(workbook, filename);

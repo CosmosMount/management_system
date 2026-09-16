@@ -104,6 +104,7 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
+  const context = parsed.submit ? await getNotificationContext() : undefined;
   const prepared = await prepareItemReferenceImages({
     orderId: parsed.orderId,
     itemKinds: storedItems.map((item) => item.itemKind),
@@ -117,7 +118,6 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
       prepared.referenceImagePaths[index] ?? [],
     ),
   }));
-  const context = parsed.submit ? await getNotificationContext() : undefined;
   let refreshed;
   try {
     refreshed = await prisma.$transaction(async (tx) => {

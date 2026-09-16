@@ -148,6 +148,7 @@ test("加工费申请可提交多张参考图片并在详情完整展示", async
   });
   let orderId: string | undefined;
   let imagePaths: string[] = [];
+  let originalImagePaths: string[] = [];
 
   await prisma.processingVendor.create({ data: { name: vendorName } });
   try {
@@ -189,13 +190,14 @@ test("加工费申请可提交多张参考图片并在详情完整展示", async
 
     const item = await prisma.purchaseItem.findFirstOrThrow({
       where: { name: marker },
-      include: { order: { select: { id: true } } },
+      include: { order: { select: { id: true, orderNo: true } } },
     });
     orderId = item.order.id;
     imagePaths = resolveItemReferenceImagePaths(
       item.referenceImagePaths,
       item.referenceImagePath,
     );
+    originalImagePaths = imagePaths;
     expect(imagePaths).toHaveLength(2);
     expect(item.referenceImagePath).toBe(imagePaths[0]);
     await expect(
@@ -211,8 +213,70 @@ test("加工费申请可提交多张参考图片并在详情完整展示", async
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize({ width: 393, height: 851 });
     await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/procurement/${orderId}/edit`, {
+      waitUntil: "networkidle",
+    });
+    await expect(page.getByLabel("已选择 2 张参考图片")).toBeVisible();
+    await page
+      .getByRole("button", { name: "移除参考图片 1" })
+      .click();
+    await page
+      .getByLabel(`参考图片（最多 9 张）`, { exact: true })
+      .setInputFiles(pngUpload("processing-side.png"));
+    await expect(page.getByLabel("已选择 2 张参考图片")).toBeVisible();
+    await page.getByRole("button", { name: "保存草稿" }).click();
+    await expect(page).toHaveURL(new RegExp(`/procurement/${orderId}$`));
+
+    const updatedItem = await prisma.purchaseItem.findFirstOrThrow({
+      where: { orderId, name: marker },
+    });
+    imagePaths = resolveItemReferenceImagePaths(
+      updatedItem.referenceImagePaths,
+      updatedItem.referenceImagePath,
+    );
+    expect(imagePaths).toHaveLength(2);
+    expect(imagePaths).toContain(originalImagePaths[1]);
+    expect(imagePaths).not.toContain(originalImagePaths[0]);
+    expect(updatedItem.referenceImagePath).toBe(imagePaths[0]);
+    await expect(
+      prisma.fileAsset.count({
+        where: { publicPath: originalImagePaths[0] },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.fileAsset.count({
+        where: {
+          orderId,
+          kind: "ORDER_ITEM_IMAGE",
+          publicPath: { in: imagePaths },
+        },
+      }),
+    ).resolves.toBe(2);
+    await expect(page.getByLabel("参考图片（2 张）")).toBeVisible();
+
+    await page.goto("/procurement/list", { waitUntil: "networkidle" });
+    const orderRow = page
+      .getByRole("row")
+      .filter({ hasText: item.order.orderNo });
+    await orderRow.getByRole("button").first().click();
+    await expect(page.getByLabel("参考图片（2 张）")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await prisma.purchaseOrder.update({
+      where: { id: orderId },
+      data: { status: "MANAGEMENT_REVIEW" },
+    });
+    await page.goto("/procurement/summary", { waitUntil: "networkidle" });
+    const summaryRow = page.getByRole("row").filter({ hasText: marker });
+    await expect(summaryRow.getByLabel("参考图片（2 张）")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   } finally {
-    await cleanupUploadPaths(imagePaths, "processing_multi_image_test_cleanup");
+    await cleanupUploadPaths(
+      [...new Set([...originalImagePaths, ...imagePaths])],
+      "processing_multi_image_test_cleanup",
+    );
     if (orderId) {
       await prisma.purchaseOrder.deleteMany({ where: { id: orderId } });
     }
