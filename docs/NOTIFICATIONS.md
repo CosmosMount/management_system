@@ -30,6 +30,7 @@
 ```text
 业务事务
   └─ NotificationOutbox（eventKey 幂等）
+       ├─ 普通逐条事件 → NotificationDeliveryBatch（可选短时聚合）
        └─ channel adapter（payload 校验、收件人、消息内容、用途）
             ├─ sendFeishuDirectMessage（身份、机器人、禁发闸、HTTP/CardKit）
             └─ email adapter → sendEmail（SMTP 禁发闸、邮箱 allowlist）
@@ -47,6 +48,14 @@
 项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
 Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业务事务成功提交后调用非阻塞即时 drain，尽快 claim 新 outbox；`NOTIFICATION_DELIVERY_DISABLED`、allowlist 和 adapter 校验仍在原投递边界生效。独立 cron 每 5 秒扫描一次，继续作为进程提前退出、即时 drain 失败和积压消息的兜底；降低 cron 间隔不能替代业务生产者入队。
+
+### 项目管理普通通知短时聚合
+
+- 只有 `channel=project-management`、`purpose=notification`、`mandatory=false` 的普通飞书私信参与聚合；审批请求、强制通知、全局/个人每日总结、采购、反馈、邮件和群 Webhook 保持逐条投递。站内通知始终逐条保存，原始 `NotificationOutbox` 与 `eventKey` 也不合并。
+- 聚合键为“通知机器人 + 单个飞书收件人 + `payload.category`”。首条事件打开固定窗口，后续同类别事件只在窗口截止前加入，不延长截止时间；每个收件人的事件集合和投递结果独立。
+- `PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS` 默认为 `30`，允许 `0-300` 的整数；`0` 关闭聚合。批次截止后由下一次 drain 投递，因此正常存在最多约 5 秒 cron 扫描抖动；已经打开的批次保留创建时的截止时间。
+- 单事件批次继续使用原卡片。多事件批次按时间列出最多 10 条标题、摘要、项目/任务和通知时间，超出部分显示数量并链接站内通知中心；所有用户文本使用纯文本元素。卡片发送成功后，批次内每条 recipient 与源 outbox 分别记录成功，失败则以整个未发送批次重试，不把批次拆成逐条消息。
+- `NotificationDeliveryBatch` 使用独立 claim、heartbeat、退避和 fencing；发送前 adapter 再校验 payload、类别、用途和收件人在职状态。批次与源 recipient 的成功、失败或取消状态在同一事务回写，禁发开关、allowlist 和通知机器人边界不变。该功能只作用于部署后新建且明确标记为聚合投递的 outbox，不改写历史积压。
 
 ## 项目管理 P1-P6 通知接入
 
@@ -69,7 +78,7 @@ Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业
 
 下表列出原业务收件人；所有现行项目/任务事件还会统一追加有效的全局超级管理员（`SUPER_ADMINISTRATOR`，全局范围、角色未撤销、关联 Person 为 ACTIVE），按账号去重。追加范围包括项目立项、成员加入、信息更新、任务归属变化、结束/删除，任务分配/成员变化、更新、激活、删除/结束，里程碑今日到期/逾期及验收，计划修订待审批/结果/生效/取消，结束申请及结果，以及风险提出/解决和评论发布。仅有项目管理员角色的账号不因此新增订阅；原业务收件人不减少。新增超级管理员同样遵守普通飞书分类偏好，原强制事件仍强制，站内通知始终保留；缺少飞书身份不影响站内通知。普通事件没有有效超级管理员时不阻断业务，审批可用管理员校验保持不变。
 
-该规则只作用于新产生的事件，不补发历史或改写既有 outbox 收件人。账号安全仍仅通知被操作账号；零成员草稿创建仍不产生任务分配通知；普通投入增删改、评论删除及已退役事件不新增通知。成员变更等既有逐人事件不合并，超级管理员每个事件收到一份，不因兼具成员/操作人/管理员身份重复收到同一事件。
+该规则只作用于新产生的事件，不补发历史或改写既有 outbox 收件人。账号安全仍仅通知被操作账号；零成员草稿创建仍不产生任务分配通知；普通投入增删改、评论删除及已退役事件不新增通知。成员变更等事件仍逐条创建站内记录和 outbox，符合上述条件时仅在飞书外发层按收件人与类别合成卡片；超级管理员仍是每个原始事件的一名收件人，不因兼具成员/操作人/管理员身份重复计入同一事件。
 
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
@@ -254,7 +263,7 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 - adapter 测试覆盖 payload/元数据校验、真实与独立传输收件人、机器人用途、未知 channel、eventKey 幂等、首次解析恢复、锁恢复和逐收件人重试。
 - 传输层使用 mock HTTP 覆盖禁发、allowlist、`open_id`/`union_id`、双机器人凭据、fallback、text/交互卡片/CardKit 和错误脱敏。
 - 采购、反馈回归必须验证收件人、消息信息完整性、机器人用途以及 CardKit 跟踪；测试不得联系真实收件人。
-- 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；还必须解析卡片按钮并断言由受信任应用域名与规范 `linkPath` 组成的完整绝对 URL，覆盖旧 `/progress` payload 的投递时推导。自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。
+- 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；普通通知聚合还要覆盖同收件人/同类别合并、跨类别隔离、固定窗口、单条原卡片、10 条展示上限、批次失败重试和源 outbox 状态汇总。测试还必须解析卡片按钮并断言由受信任应用域名与规范 `linkPath` 组成的完整绝对 URL，覆盖旧 `/progress` payload 的投递时推导。自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。
 
 ## 投入确认事件退役
 

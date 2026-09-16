@@ -13,6 +13,7 @@ import {
   nextNotificationRetryAt as nextRetryAt,
 } from "@/lib/notification-outbox/constants";
 import type { DrainNotificationOutboxOptions } from "@/lib/notification-outbox/types";
+import { drainAggregatedNotificationBatches } from "@/lib/notification-outbox/aggregation-delivery";
 import { sendOutboxNotificationByRecipient } from "@/lib/notification-outbox/recipient-delivery";
 
 export {
@@ -41,9 +42,13 @@ export async function drainNotificationOutboxWithResolver(
   const now = new Date();
   const rows = await prisma.notificationOutbox.findMany({
     where: {
-      attempts: { lt: MAX_ATTEMPTS },
+      deliveryMode: "DIRECT",
       OR: [
-        { status: { in: ["PENDING", "FAILED"] }, nextRunAt: { lte: now } },
+        {
+          status: { in: ["PENDING", "FAILED"] },
+          attempts: { lt: MAX_ATTEMPTS },
+          nextRunAt: { lte: now },
+        },
         { status: "PROCESSING", lockedUntil: { lte: now } },
       ],
     },
@@ -54,7 +59,10 @@ export async function drainNotificationOutboxWithResolver(
   let sent = 0;
   for (const row of rows) {
     const lockedUntil = nextClaimExpiry();
-    const claim = { attempts: row.attempts + 1, lockedUntil };
+    const claim = {
+      attempts: Math.min(row.attempts + 1, MAX_ATTEMPTS),
+      lockedUntil,
+    };
     const claimed = await prisma.notificationOutbox.updateMany({
       where: {
         id: row.id,
@@ -69,7 +77,7 @@ export async function drainNotificationOutboxWithResolver(
       },
       data: {
         status: "PROCESSING",
-        attempts: { increment: 1 },
+        attempts: claim.attempts,
         lastError: "",
         lockedUntil,
       },
@@ -108,7 +116,7 @@ export async function drainNotificationOutboxWithResolver(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const nonRetryable = isNonRetryableNotificationError(err);
-      const attempts = nonRetryable ? MAX_ATTEMPTS : row.attempts + 1;
+      const attempts = nonRetryable ? MAX_ATTEMPTS : claim.attempts;
       await prisma.notificationOutbox.updateMany({
         where: {
           id: row.id,
@@ -120,14 +128,17 @@ export async function drainNotificationOutboxWithResolver(
           status: "FAILED",
           attempts,
           lastError: message.slice(0, 1000),
-          nextRunAt: nonRetryable ? FROZEN_NEXT_RUN_AT : nextRetryAt(attempts),
+          nextRunAt:
+            nonRetryable || attempts >= MAX_ATTEMPTS
+              ? FROZEN_NEXT_RUN_AT
+              : nextRetryAt(attempts),
           lockedUntil: null,
         },
       });
     }
   }
 
-  return sent;
+  return sent + await drainAggregatedNotificationBatches(resolveChannel, limit);
 }
 
 async function sendOutboxNotification(

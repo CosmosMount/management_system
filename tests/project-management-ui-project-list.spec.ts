@@ -98,8 +98,8 @@ for (const ownerCount of [0, 1, 2, 4]) {
     }
     if (ownerCount >= 2) await prisma.person.update({ where: { id: owners[0].person.id }, data: { avatar: "/owner-avatar-test-good.svg" } });
     if (owners[1]) await prisma.person.update({ where: { id: owners[1].person.id }, data: { avatar: "/owner-avatar-test-broken.svg" } });
-    await page.route("**/owner-avatar-test-good.svg", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#94a3b8"/><text x="16" y="22" text-anchor="middle" fill="white" font-size="18">李</text></svg>' }));
-    await page.route("**/owner-avatar-test-broken.svg", (route) => route.fulfill({ status: 404, body: "" }));
+    await page.route("**/owner-avatar-test-good.svg*", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#94a3b8"/><text x="16" y="22" text-anchor="middle" fill="white" font-size="18">李</text></svg>' }));
+    await page.route("**/owner-avatar-test-broken.svg*", (route) => route.fulfill({ status: 404, body: "" }));
     const title = `头像验收 ${randomUUID()}`;
     const members = [
       ...owners.map((owner) => ({ personId: owner.person.id, role: "OWNER" as const })),
@@ -239,7 +239,7 @@ test("空概览保留整体完成进度，项目链接和既有状态筛选仍�
   const row = page.getByTestId(`project-list-item-${project.id}`);
   await expect(row.getByText("暂无草稿或进行中的任务", { exact: true })).toBeVisible();
   await expect(row.getByText("暂无项目简介", { exact: true })).toBeVisible();
-  await expect(row.getByText("负责人未设置", { exact: true })).toBeVisible();
+  await expect(row.getByTestId("owner-avatar-group")).toHaveAccessibleName("项目负责人未设置");
   await expect(row.getByTestId("project-task-summary")).toContainText("1 / 1");
   await expect(row.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
   await expect(page.getByTestId(`project-list-item-${empty.id}`).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");

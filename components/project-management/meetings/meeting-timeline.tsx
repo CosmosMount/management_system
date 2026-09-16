@@ -56,13 +56,16 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
     </div>}
     <p className="text-sm text-muted-foreground">时间线展示当前工作记录，非会议保存时快照。所有人看到相同内容，不能在此修改工作记录。</p>
     {!current && <p role="status">正在加载工作时间线…</p>}
-    {current?.error && <p role="alert" className="break-words text-sm text-destructive">{current.error}</p>}
+    {current?.error && <div className="space-y-2">
+      <p role="alert" className="break-words text-sm text-destructive">{current.error}</p>
+      <Button type="button" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新时间线</Button>
+    </div>}
     {current?.model && <div className="min-w-0 overflow-hidden" data-testid="meeting-timeline">
       <ResourcePlannerCanvasClient key={loadKey} mode="PERSONAL_TIMELINE" initialModel={current.model}
         peopleOptions={[]} taskOptions={[]} defaultPersonId="" allowCreate={false} allowIndependent={false} readOnly
         initialCenterMs={(Date.parse(source.rangeStart) + Date.parse(source.rangeEnd)) / 2}
         highlightedRange={{ startMs: Date.parse(source.rangeStart), endMs: Date.parse(source.rangeEnd) }}
-        toolbarAction={<Button type="button" variant="outline" disabled={!current} onClick={() => setRevision((value) => value + 1)}>刷新</Button>} />
+        toolbarAction={<Button type="button" variant="outline" disabled={!current} onClick={() => setRevision((value) => value + 1)}>刷新时间线</Button>} />
     </div>}
   </section>;
 }

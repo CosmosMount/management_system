@@ -3,7 +3,11 @@ import { test, expect, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createDeadlineTask } from "./helpers/current-node-deadline-fixtures";
-import { createAccountPerson, grantGlobalProjectAdministrator } from "./helpers/project-management-canvas-security-fixtures";
+import {
+  createAccountPerson,
+  createTaskOptionFixtures,
+  grantGlobalProjectAdministrator,
+} from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
 test.beforeAll(async () => {
@@ -97,6 +101,13 @@ test("任务、项目、待办、选择器与所有画布显示同一当前节�
   const owner = await createAccountPerson(`到期跨页 ${randomUUID()}`);
   const project = await prisma.project.create({ data: { name: `到期展示项目 ${randomUUID()}`, description: "一致性回归", status: "ACTIVE", requesterAccountId: owner.account.id } });
   const fixture = await createDeadlineTask(owner, { dueAt: new Date(Date.now() - 86_400_000), projectId: project.id });
+  const optionOwner = await createAccountPerson(`到期选择器隔离 ${randomUUID()}`);
+  await createTaskOptionFixtures({
+    ownerAccountId: optionOwner.account.id,
+    ownerPersonId: optionOwner.person.id,
+    titlePrefix: `000 到期选择器隔离 ${randomUUID()}`,
+    count: 50,
+  });
   const center = encodeURIComponent(fixture.dueAt.toISOString());
   await page.clock.install({ time: Date.now() });
   const errors: Error[] = [];
@@ -155,8 +166,10 @@ test("任务、项目、待办、选择器与所有画布显示同一当前节�
     }
   }
   await page.goto("/progress/tasks/new");
-  await page.getByText("关联任务与项目（可选）", { exact: true }).click();
-  await page.getByRole("combobox", { name: "关联任务", exact: true }).fill(fixture.title);
+  await page.clock.resume();
+  const taskPicker = page.getByRole("combobox", { name: "关联 Task", exact: true });
+  await taskPicker.click();
+  await taskPicker.pressSequentially(fixture.title);
   const option = page.getByRole("option", { name: fixture.title, exact: true });
   await expect(option).toBeVisible();
   await expect(option).toHaveAccessibleDescription(/已逾期/);
@@ -165,7 +178,7 @@ test("任务、项目、待办、选择器与所有画布显示同一当前节�
   await expect(option).toHaveAccessibleDescription(/即将到期/);
   await expect(option.locator('[data-deadline-status="DUE_SOON"]')).toBeVisible();
   await option.click();
-  await expect(page.getByRole("combobox", { name: "关联任务", exact: true })).toHaveValue(fixture.title);
+  await expect(taskPicker).toHaveValue(fixture.title);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
 });

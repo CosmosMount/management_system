@@ -20,6 +20,7 @@ import {
   projectManagementStatusLabel,
 } from "@/lib/project-management/notifications/user-facing-copy";
 import { resolveProjectManagementNotificationLinkPath } from "@/lib/project-management/notifications/link-path";
+import { buildProjectManagementAggregatedCard } from "@/lib/project-management/notifications/aggregation-card";
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
@@ -109,37 +110,62 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     row,
     recipientOpenId,
   ): Promise<NotificationDeliveryTarget> {
-    const { payload, botKind } = parseProjectManagementNotification(row);
-    if (!(await eligibleSummaryRecipients(payload, [recipientOpenId])).length) {
-      throw new CanceledNotificationError("收件人已不再具有该总结的接收权限，取消总结投递");
+    return sendProjectManagementNotificationToRecipient(row, recipientOpenId);
+  },
+  async sendAggregatedToRecipient(rows, recipientOpenId, context) {
+    if (rows.length === 0) {
+      throw new NonRetryableNotificationError("项目管理聚合批次没有通知事件");
+    }
+    const parsed = rows.map((row) => ({
+      row,
+      ...parseProjectManagementNotification(row),
+    }));
+    if (
+      parsed.some(
+        ({ payload, botKind }) =>
+          payload.purpose !== "notification" ||
+          payload.mandatory ||
+          isSummaryNotification(payload) ||
+          payload.category !== context.category ||
+          botKind !== "notification",
+      )
+    ) {
+      throw new NonRetryableNotificationError(
+        "项目管理聚合批次包含不可聚合或类别不一致的通知",
+      );
     }
     if (
       (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
     ) {
-      throw new CanceledNotificationError("收件人已停用，取消本次投递");
+      throw new CanceledNotificationError("收件人已停用，取消本次聚合投递");
     }
-    const cancelReason = await staleApprovalCancelReason(
-      payload,
-      row.eventKey,
-    );
-    if (cancelReason) {
-      throw new CanceledNotificationError(cancelReason);
+    if (parsed.length === 1) {
+      return sendProjectManagementNotificationToRecipient(
+        parsed[0]!.row,
+        recipientOpenId,
+      );
     }
     return deliveryTarget(
       await sendFeishuDirectMessage({
         recipientOpenId,
-        botKind,
-        purpose: payload.purpose,
+        botKind: "notification",
+        purpose: "notification",
         message: {
-          type: isSummaryNotification(payload) ? "cardkit" : "interactive",
-          card: buildProjectManagementCard(payload, row.createdAt),
+          type: "interactive",
+          card: buildProjectManagementAggregatedCard(
+            parsed.map(({ row, payload }) => ({
+              payload,
+              createdAt: row.createdAt,
+            })),
+            context.category,
+          ),
         },
         logContext: {
-          action: "sendProjectManagementNotification",
+          action: "sendProjectManagementAggregatedNotification",
           channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
-          eventKey: row.eventKey,
-          entityType: payload.entityType,
-          entityId: payload.entityId,
+          eventKey: `batch:${context.batchId}`,
+          entityType: "NotificationDeliveryBatch",
+          entityId: context.batchId,
         },
       }),
     );
@@ -177,6 +203,46 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     }
   },
 };
+
+async function sendProjectManagementNotificationToRecipient(
+  row: NotificationOutbox,
+  recipientOpenId: string,
+): Promise<NotificationDeliveryTarget> {
+    const { payload, botKind } = parseProjectManagementNotification(row);
+    if (!(await eligibleSummaryRecipients(payload, [recipientOpenId])).length) {
+      throw new CanceledNotificationError("收件人已不再具有该总结的接收权限，取消总结投递");
+    }
+    if (
+      (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
+    ) {
+      throw new CanceledNotificationError("收件人已停用，取消本次投递");
+    }
+    const cancelReason = await staleApprovalCancelReason(
+      payload,
+      row.eventKey,
+    );
+    if (cancelReason) {
+      throw new CanceledNotificationError(cancelReason);
+    }
+    return deliveryTarget(
+      await sendFeishuDirectMessage({
+        recipientOpenId,
+        botKind,
+        purpose: payload.purpose,
+        message: {
+          type: isSummaryNotification(payload) ? "cardkit" : "interactive",
+          card: buildProjectManagementCard(payload, row.createdAt),
+        },
+        logContext: {
+          action: "sendProjectManagementNotification",
+          channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
+          eventKey: row.eventKey,
+          entityType: payload.entityType,
+          entityId: payload.entityId,
+        },
+      }),
+    );
+}
 
 async function eligibleSummaryRecipients(payload: ProjectManagementNotificationPayload, openIds: string[]) {
   if (payload.kind === "project_management_personal_summary_daily") {

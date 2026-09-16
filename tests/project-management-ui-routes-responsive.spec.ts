@@ -163,8 +163,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
 
       await page.goto("/progress/tasks");
       await expect(page.getByRole("heading", { level: 1, name: "任务", exact: true })).toBeVisible();
-      await expect(page.getByLabel("任务状态")).toHaveValue("ACTIVE");
-      await expect(page.getByRole("combobox", { name: "任务范围", exact: true })).toHaveValue("1");
+      await expect(page.getByLabel("任务状态")).toHaveValue("");
+      await expect(page.getByRole("combobox", { name: "任务范围", exact: true })).toHaveValue("0");
       await expect(page.getByRole("link", { name: fixture.taskTitle, exact: true })).toBeVisible();
       await page.getByLabel("任务状态").selectOption("");
       await page.getByRole("combobox", { name: "任务范围", exact: true }).selectOption("0");

@@ -16,16 +16,22 @@ export async function openTaskComposerDisclosure(
   page: Page,
   label: "补充说明与优先级" | "关联任务与项目（可选）" | "时间画布与批量调整（高级）" | "补充业务说明（可选）",
 ) {
-  if (label === "补充说明与优先级" || label === "关联任务与项目（可选）") {
-    await page.getByRole("navigation", { name: "任务表单分区" })
-      .getByRole("button", { name: "1. 基本资料", exact: true }).click();
+  if (label === "补充说明与优先级") {
+    await expect(page.getByRole("complementary", { name: "Task 基本信息" })).toBeVisible();
+    await expect(page.getByLabel("描述", { exact: true })).toBeVisible();
+    return;
   }
-  const summary = page.getByTestId("task-composer").locator("summary").filter({ hasText: label });
-  await expect(summary).toHaveCount(1);
-  if (await summary.locator("..").getAttribute("open") === null) {
-    await summary.click();
+  if (label === "关联任务与项目（可选）") {
+    await expect(page.getByLabel("关联 Task", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("选择所属项目", { exact: true })).toBeVisible();
+    return;
   }
-  await expect(summary.locator("..")).toHaveAttribute("open", "");
+  if (label === "时间画布与批量调整（高级）") {
+    await expect(page.getByRole("heading", { name: "计划时间画布", exact: true })).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    return;
+  }
+  await expect(page.getByLabel("业务说明", { exact: true })).toBeVisible();
 }
 
 export const MUTATION_ACTION_CASES = [

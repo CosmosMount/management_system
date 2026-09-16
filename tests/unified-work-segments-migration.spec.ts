@@ -409,9 +409,15 @@ async function assertRetiredNotices(client: Client, baseline: Awaited<ReturnType
   for (const [table, changedIds] of [
     ["NotificationOutbox", fixture.canceledOutboxIds], ["NotificationOutboxRecipient", fixture.canceledRecipientIds],
   ] as const) {
-    const expected = (baseline[table] ?? []).map((row) => changedIds.includes(row.id)
-      ? { ...row, status: "CANCELED", lockedUntil: null, lastError: "投入确认功能已退役，不再投递", updatedAt: expect.any(String) }
-      : row);
+    const deliveryDefaults = table === "NotificationOutbox"
+      ? { deliveryMode: "DIRECT" }
+      : { deliveryBatchId: null };
+    const expected = (baseline[table] ?? []).map((row) => {
+      const migratedRow = { ...row, ...deliveryDefaults };
+      return changedIds.includes(row.id)
+        ? { ...migratedRow, status: "CANCELED", lockedUntil: null, lastError: "投入确认功能已退役，不再投递", updatedAt: expect.any(String) }
+        : migratedRow;
+    });
     const actual = await rows(client, table);
     expect(actual).toEqual(expected);
     for (const row of actual.filter((item) => changedIds.includes(item.id))) {

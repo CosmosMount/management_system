@@ -55,7 +55,7 @@
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
 - `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 构造交互卡并通过统一私信传输层投递，Milestone/Revision/Terminal 待审批使用审批机器人，其他事件使用通知机器人；Revision 待审批在投递前额外校验当前状态和审批轮次，取消或旧轮次会转为取消投递。
-- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人时不能把已成功收件人再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
+- 通知 outbox 以 `NotificationOutbox` 表示业务事件、`NotificationOutboxRecipient` 表示单个收件人的投递状态；可聚合的项目普通私信额外用 `NotificationDeliveryBatch` 表示一次真实外发，源事件和 recipient 仍逐条保留。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调、聚合批次与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人或批次时不能把已成功内容再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 - 浏览器共享契约位于 `lib/project-management/composer-contract.ts` 与 `lib/project-management/time-canvas/`，服务端领域和查询不得从 `components/` 或带 `"use client"` 的模块反向导入类型或实现。`npm run check:dependencies` 使用 TypeScript AST 校验传递依赖边界、浏览器契约的服务端依赖、outbox 核心业务依赖，并从 Next 路由、脚本、测试和根配置入口遍历后拒绝 `components/`/`lib/` 中不可达的源码。
 
 ## 前端版本与资源更新
@@ -87,7 +87,7 @@
 
 ### 已知框架治理项
 
-- Web 进程中的 `drainNotificationOutboxSoon()` 只提供事务提交后的低延迟、best-effort 触发，不承担可靠调度；进程退出、执行失败和积压消息仍必须由 cron/worker 接管。
+- Web 进程中的 `drainNotificationOutboxSoon()` 只提供事务提交后的低延迟、best-effort 触发，不承担可靠调度；项目普通通知的聚合批次还必须等待持久化窗口截止。进程退出、执行失败和积压消息仍由每 5 秒 cron/worker 接管。
 - outbox claim 使用查询时的 `status/attempts/lockedUntil` 与可投递时间进行条件更新；收件人外部发送期间定时在同一事务续租父 outbox 与 recipient，所有完成/失败回写继续以最新 `attempts + lockedUntil` fencing，避免旧 worker 覆盖新租约或慢请求触发重复投递。
 - channel adapter 必须固化业务 payload 与收件人计划；不要在 outbox 核心或飞书传输层增加业务分支。
 - 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式确认（例如既有 `APPLY_*=true` 或受控 `--apply` 参数）和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。

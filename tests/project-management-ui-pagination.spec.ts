@@ -81,7 +81,7 @@ test("notification, Task, risk, and activity records beyond the first page remai
   ).toBeVisible();
   await expectHealthyPage(page);
 
-  await page.goto("/progress/tasks");
+  await page.goto("/progress/tasks?mine=1&status=ACTIVE");
   await expect(page.getByText("UI 分页 Task 0", { exact: true })).toBeVisible();
   await expect(page.getByText("UI 分页 Task 50", { exact: true })).toHaveCount(0);
   const nextTaskHref = await page

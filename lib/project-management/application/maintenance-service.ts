@@ -9,6 +9,7 @@ import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
+import { MAX_NOTIFICATION_ATTEMPTS } from "@/lib/notification-outbox/constants";
 
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -135,14 +136,43 @@ export async function runProjectManagementNotificationRetention(
       take: boundedBatchSize,
     }),
   ]);
-  const [inApp, outbox] = await prisma.$transaction([
-    prisma.inAppNotification.deleteMany({
+  const [inApp, outbox] = await prisma.$transaction(async (tx) => {
+    const deletedInApp = await tx.inAppNotification.deleteMany({
       where: { id: { in: readRows.map((row) => row.id) } },
-    }),
-    prisma.notificationOutbox.deleteMany({
-      where: { id: { in: outboxRows.map((row) => row.id) } },
-    }),
-  ]);
+    });
+    const deletedOutbox = await tx.notificationOutbox.deleteMany({
+      where: {
+        id: { in: outboxRows.map((row) => row.id) },
+        channel: "project-management",
+        OR: [
+          { status: "SENT", sentAt: { lt: terminalOutboxBefore } },
+          { status: "FAILED", updatedAt: { lt: staleFailedBefore } },
+        ],
+        recipients: {
+          none: {
+            deliveryBatch: {
+              is: {
+                OR: [
+                  { status: "PROCESSING" },
+                  {
+                    status: { in: ["PENDING", "FAILED"] },
+                    attempts: { lt: MAX_NOTIFICATION_ATTEMPTS },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+    await tx.notificationDeliveryBatch.deleteMany({
+      where: {
+        recipients: { none: {} },
+        updatedAt: { lt: terminalOutboxBefore },
+      },
+    });
+    return [deletedInApp, deletedOutbox] as const;
+  });
   return { deletedInAppCount: inApp.count, deletedOutboxCount: outbox.count };
 }
 
@@ -249,8 +279,8 @@ export async function runConfiguredProjectManagementReminders(now = new Date()) 
         if (await prisma.domainAuditEvent.findFirst({ where: { action: "pm.reminder.executed", entityId: slotKey } })) return;
         if (setting.kind === "MILESTONE_DUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_due", { key: slotKey, actorName: "系统" });
         if (setting.kind === "MILESTONE_OVERDUE") await runMilestoneDeadlineScan(now, 5_000, "milestone_overdue", { key: slotKey, actorName: "系统" });
-        if (setting.kind === "TASK_ACTIVATION_OVERDUE") await runTaskActivationOverdueScan(now, slotKey, setting.id);
-        if (setting.kind === "TASK_APPROVAL_PENDING") await runTaskApprovalPendingScan(slotKey, setting.id);
+        if (setting.kind === "TASK_ACTIVATION_OVERDUE") await runTaskActivationOverdueScan(now, localDate, setting.id);
+        if (setting.kind === "TASK_APPROVAL_PENDING") await runTaskApprovalPendingScan(localDate, setting.id);
         await prisma.$transaction((tx) => createDomainAuditEventTx(tx, {
           actorAccountId: null, actorPersonId: null, action: "pm.reminder.executed",
           entityType: "ProjectManagementReminderSetting", entityId: slotKey,

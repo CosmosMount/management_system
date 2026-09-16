@@ -163,6 +163,10 @@ test("legacy history retirement archives old values, blocks active roles and rea
     });
     const notificationSnapshotAfterConcurrentWrite =
       await notificationSnapshot(observer);
+    const notificationSnapshotAfterCurrentMigrations =
+      withCurrentNotificationDeliveryColumns(
+        notificationSnapshotAfterConcurrentWrite,
+      );
     await target.query("COMMIT");
     const successfulDeploy = await activeDeploy.completion;
     expect(successfulDeploy.status, commandOutput(successfulDeploy)).toBe(0);
@@ -183,7 +187,7 @@ test("legacy history retirement archives old values, blocks active roles and rea
       notificationCountsAfterConcurrentWrite,
     );
     expect(await notificationSnapshot(target)).toEqual(
-      notificationSnapshotAfterConcurrentWrite,
+      notificationSnapshotAfterCurrentMigrations,
     );
     expect(
       await rowsByIds(target, "SystemRoleAssignment", [
@@ -438,7 +442,7 @@ test("legacy history retirement archives old values, blocks active roles and rea
       notificationCountsAfterConcurrentWrite,
     );
     expect(await notificationSnapshot(target)).toEqual(
-      notificationSnapshotAfterConcurrentWrite,
+      notificationSnapshotAfterCurrentMigrations,
     );
     expect(await auditGuardNames(target)).toEqual([
       "DomainAuditEvent_prevent_delete",
@@ -927,6 +931,41 @@ async function notificationSnapshot(client: Client) {
      ) AS snapshot`,
   );
   return result.rows[0]?.snapshot;
+}
+
+function withCurrentNotificationDeliveryColumns(
+  snapshot: Record<string, unknown> | undefined,
+) {
+  if (!snapshot) return snapshot;
+  return {
+    ...snapshot,
+    outbox: addDefaultColumnToSnapshotRows(
+      snapshot.outbox,
+      "deliveryMode",
+      "DIRECT",
+    ),
+    recipients: addDefaultColumnToSnapshotRows(
+      snapshot.recipients,
+      "deliveryBatchId",
+      null,
+    ),
+  };
+}
+
+function addDefaultColumnToSnapshotRows(
+  value: unknown,
+  column: string,
+  defaultValue: unknown,
+) {
+  if (!Array.isArray(value)) {
+    throw new Error(`通知快照字段不是数组: ${column}`);
+  }
+  return value.map((row) => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new Error(`通知快照行格式无效: ${column}`);
+    }
+    return { ...row, [column]: defaultValue };
+  });
 }
 
 async function auditCount(client: Client, pattern: string) {
