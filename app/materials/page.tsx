@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { PackageCheck, PackageOpen, PackageSearch } from "lucide-react";
+import {
+  MaterialBatchPrintCheckbox,
+  MaterialBatchPrinter,
+} from "@/components/material-management/material-batch-printer";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -13,12 +17,14 @@ import {
   ListItem,
 } from "@/components/ui/list";
 import { TECH_GROUP_OPTIONS } from "@/lib/constants";
+import { buildAppUrl } from "@/lib/app-origin";
 import { listMaterials } from "@/lib/material-management/queries";
 import {
   formatMaterialDateTime,
   formatMaterialPrice,
 } from "@/lib/material-management/presentation";
 import { routes } from "@/lib/routes";
+import { getRequestAppOrigin } from "@/lib/request-origin";
 import { cn } from "@/lib/utils";
 import { getMaterialActorOrRedirect } from "./_auth";
 
@@ -44,6 +50,14 @@ export default async function MaterialsPage({
       ? requestedStatus
       : undefined;
   const result = await listMaterials({ query, techGroup, status });
+  const appOrigin = await getRequestAppOrigin();
+  const batchPrintItems = result.items.map((material) => ({
+    id: material.id,
+    materialName: material.name,
+    price: formatMaterialPrice(material.price),
+    scanUrl: buildAppUrl(routes.materials.scan(material.qrToken), appOrigin),
+    techGroup: material.techGroup,
+  }));
 
   return (
     <>
@@ -135,70 +149,76 @@ export default async function MaterialsPage({
               : "尚未登记物资"}
           </ListEmpty>
         ) : (
-          <List aria-label="物资列表">
-            {result.items.map((material) => (
-              <ListItem key={material.id}>
-                <ListContent>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <MaterialBatchPrinter items={batchPrintItems}>
+            <List aria-label="物资列表">
+              {result.items.map((material) => (
+                <ListItem key={material.id}>
+                  <MaterialBatchPrintCheckbox
+                    id={material.id}
+                    materialName={material.name}
+                  />
+                  <ListContent>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Link
+                        href={routes.materials.detail(material.id)}
+                        className="min-w-0 break-words text-base font-medium hover:text-primary hover:underline"
+                      >
+                        {material.name}
+                      </Link>
+                      <Badge variant="outline">{material.techGroup}</Badge>
+                      {material.pairedMaterial && (
+                        <Badge variant="secondary">
+                          配套：{material.pairedMaterial.name}
+                        </Badge>
+                      )}
+                      <Badge
+                        variant={material.activeLoan ? "secondary" : "default"}
+                      >
+                        {material.activeLoan ? "使用中" : "可领用"}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {formatMaterialPrice(material.price)}
+                      <span aria-hidden="true"> · </span>
+                      登记于 {formatMaterialDateTime(material.createdAt)}
+                    </p>
+                    <p className="mt-2 break-words text-sm">
+                      {material.activeLoan ? (
+                        <>
+                          当前使用人：
+                          <span className="font-medium">
+                            {material.activeLoan.borrowerName}
+                            {material.activeLoan.borrowerAccountId ===
+                            actor.accountId
+                              ? "（我）"
+                              : ""}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · {formatMaterialDateTime(
+                              material.activeLoan.checkedOutAt,
+                            )} 领用
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          当前无人使用，可扫描二维码领用
+                        </span>
+                      )}
+                    </p>
+                  </ListContent>
+                  <ListActions>
                     <Link
                       href={routes.materials.detail(material.id)}
-                      className="min-w-0 break-words text-base font-medium hover:text-primary hover:underline"
+                      className={cn(buttonVariants({ variant: "outline" }))}
                     >
-                      {material.name}
+                      查看二维码
                     </Link>
-                    <Badge variant="outline">{material.techGroup}</Badge>
-                    {material.pairedMaterial && (
-                      <Badge variant="secondary">
-                        配套：{material.pairedMaterial.name}
-                      </Badge>
-                    )}
-                    <Badge
-                      variant={material.activeLoan ? "secondary" : "default"}
-                    >
-                      {material.activeLoan ? "使用中" : "可领用"}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {formatMaterialPrice(material.price)}
-                    <span aria-hidden="true"> · </span>
-                    登记于 {formatMaterialDateTime(material.createdAt)}
-                  </p>
-                  <p className="mt-2 break-words text-sm">
-                    {material.activeLoan ? (
-                      <>
-                        当前使用人：
-                        <span className="font-medium">
-                          {material.activeLoan.borrowerName}
-                          {material.activeLoan.borrowerAccountId ===
-                          actor.accountId
-                            ? "（我）"
-                            : ""}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {" "}
-                          · {formatMaterialDateTime(
-                            material.activeLoan.checkedOutAt,
-                          )} 领用
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground">
-                        当前无人使用，可扫描二维码领用
-                      </span>
-                    )}
-                  </p>
-                </ListContent>
-                <ListActions>
-                  <Link
-                    href={routes.materials.detail(material.id)}
-                    className={cn(buttonVariants({ variant: "outline" }))}
-                  >
-                    查看二维码
-                  </Link>
-                </ListActions>
-              </ListItem>
-            ))}
-          </List>
+                  </ListActions>
+                </ListItem>
+              ))}
+            </List>
+          </MaterialBatchPrinter>
         )}
         {result.hasMore && (
           <p role="status" className="text-sm text-amber-700">

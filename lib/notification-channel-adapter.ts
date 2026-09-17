@@ -52,6 +52,11 @@ export interface NotificationChannelAdapter {
     recipientOpenId: string,
   ): Promise<NotificationDeliveryTarget>;
   sendComposite(row: NotificationOutbox): Promise<void>;
+  sendAggregatedToRecipient?(
+    rows: NotificationOutbox[],
+    recipientOpenId: string,
+    context: { batchId: string; category: string },
+  ): Promise<NotificationDeliveryTarget>;
   beforeRecipientDelivery?(row: NotificationOutbox): Promise<void>;
 }
 

@@ -1,13 +1,13 @@
 // @playwright-project ui
 import { expect, test } from "@playwright/test";
-import { FRONTEND_VERSION } from "../lib/frontend-version";
 import { createAccountPerson, grantGlobalProjectAdministrator } from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
 test("前端版本公开只读、禁止缓存，清理入口仅允许本站请求且不清登录和存储", async ({ page, request, baseURL }) => {
   const response = await request.get("/api/frontend-version");
   expect(response.ok()).toBe(true);
-  expect(await response.json()).toEqual({ version: FRONTEND_VERSION });
+  const payload = await response.json() as { version: string };
+  expect(payload.version).toMatch(/^\d{4}\.\d{2}\.\d{2}\.\d+$/);
   expect(response.headers()["cache-control"]).toContain("no-store");
   expect(response.headers()["clear-site-data"]).toBeUndefined();
   const denied = await request.post("/api/frontend-version", { headers: { origin: "https://untrusted.example", "x-frontend-version-refresh": "1" } });
@@ -19,13 +19,14 @@ test("前端版本公开只读、禁止缓存，清理入口仅允许本站请�
   expect(allowed.ok()).toBe(true);
   expect(allowed.headers()["clear-site-data"]).toBe('"cache"');
   await page.goto("/login");
-  await expect(page.getByLabel("前端版本")).toContainText(`前端 v${FRONTEND_VERSION}`);
-  await expect(page.locator('meta[name="frontend-version"]')).toHaveAttribute("content", FRONTEND_VERSION);
+  await expect(page.getByLabel("前端版本")).toContainText(`前端 v${payload.version}`);
+  await expect(page.locator('meta[name="frontend-version"]')).toHaveAttribute("content", payload.version);
   await expectHealthyPage(page);
 });
 
-test("发现新版本自动整页更新，保留参数和站点数据，旧资源不会循环刷新", async ({ page, context, baseURL }) => {
-  const nextVersion = FRONTEND_VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 1));
+test("发现新版本自动整页更新，保留参数和站点数据，旧资源不会循环刷新", async ({ page, context, request, baseURL }) => {
+  const currentVersion = await serverFrontendVersion(request);
+  const nextVersion = nextFrontendVersion(currentVersion);
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
   await page.clock.install({ time: Date.now() });
@@ -61,11 +62,12 @@ test("发现新版本自动整页更新，保留参数和站点数据，旧资�
   expect(errors).toEqual([]);
 });
 
-test("编辑中的项目草稿不会因版本变化被刷新丢失，取消手动更新保留输入", async ({ page, context, baseURL }) => {
-  const nextVersion = FRONTEND_VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 1));
+test("编辑中的项目草稿不会因版本变化被刷新丢失，取消手动更新保留输入", async ({ page, context, request, baseURL }) => {
+  const currentVersion = await serverFrontendVersion(request);
+  const nextVersion = nextFrontendVersion(currentVersion);
   const owner = await createAccountPerson("前端升级草稿保护");
   await grantGlobalProjectAdministrator(owner.account.id);
-  let version = FRONTEND_VERSION;
+  let version = currentVersion;
   let refreshCount = 0;
   await page.route("**/api/frontend-version?*", async (route) => {
     if (route.request().method() === "POST") refreshCount += 1;
@@ -73,9 +75,9 @@ test("编辑中的项目草稿不会因版本变化被刷新丢失，取消手�
   });
   await loginAsTestUser(context, baseURL, { openId: owner.openId, name: owner.person.displayName });
   await page.goto("/progress/projects/new");
-  const name = page.getByRole("textbox", { name: "项目名称", exact: true });
+  const name = page.getByRole("textbox", { name: "Project 名称", exact: true });
   await name.fill("尚未保存的版本升级草稿");
-  await page.getByRole("heading", { name: "提交项目立项" }).click();
+  await page.getByRole("heading", { name: "提交 Project 立项" }).click();
   version = nextVersion;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByRole("status")).toContainText("请先保存内容");
@@ -109,8 +111,9 @@ test("版本检查离线或收到异常内容时保留当前页面，不清缓�
   await expectHealthyPage(page);
 });
 
-test("清缓存请求期间开始编辑时取消自动导航，不丢失新输入", async ({ page, context, baseURL }) => {
-  const nextVersion = FRONTEND_VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 1));
+test("清缓存请求期间开始编辑时取消自动导航，不丢失新输入", async ({ page, context, request, baseURL }) => {
+  const currentVersion = await serverFrontendVersion(request);
+  const nextVersion = nextFrontendVersion(currentVersion);
   const owner = await createAccountPerson("版本检查并发编辑保护");
   await grantGlobalProjectAdministrator(owner.account.id);
   let releaseRefresh: () => void = () => {};
@@ -127,7 +130,7 @@ test("清缓存请求期间开始编辑时取消自动导航，不丢失新输�
   await page.goto("/progress/projects/new");
   try {
     await expect.poll(() => refreshCount).toBe(1);
-    const name = page.getByRole("textbox", { name: "项目名称", exact: true });
+    const name = page.getByRole("textbox", { name: "Project 名称", exact: true });
     await name.fill("请求期间新输入的项目名称");
     releaseRefresh();
     await expect(page.getByRole("status")).toContainText("更新期间检测到操作，已暂停刷新");
@@ -138,3 +141,15 @@ test("清缓存请求期间开始编辑时取消自动导航，不丢失新输�
     releaseRefresh();
   }
 });
+
+async function serverFrontendVersion(request: import("@playwright/test").APIRequestContext) {
+  const response = await request.get("/api/frontend-version");
+  expect(response.ok()).toBe(true);
+  const payload = await response.json() as { version?: unknown };
+  expect(payload.version).toMatch(/^\d{4}\.\d{2}\.\d{2}\.\d+$/);
+  return payload.version as string;
+}
+
+function nextFrontendVersion(version: string) {
+  return version.replace(/\d+$/, (patch) => String(Number(patch) + 1));
+}

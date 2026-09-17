@@ -58,9 +58,12 @@ export async function sendOutboxNotificationByRecipient(
   const recipients = await prisma.notificationOutboxRecipient.findMany({
     where: {
       outboxId: row.id,
-      attempts: { lt: MAX_NOTIFICATION_ATTEMPTS },
       OR: [
-        { status: { in: ["PENDING", "FAILED"] }, nextRunAt: { lte: now } },
+        {
+          status: { in: ["PENDING", "FAILED"] },
+          attempts: { lt: MAX_NOTIFICATION_ATTEMPTS },
+          nextRunAt: { lte: now },
+        },
         { status: "PROCESSING", lockedUntil: { lte: now } },
       ],
     },
@@ -78,7 +81,10 @@ async function failOutboxWithNoRecipients(
   claim: NotificationDeliveryClaim,
   emptyRecipientReason?: string,
 ) {
-  const attempts = row.attempts + 1;
+  const attempts = Math.min(
+    row.attempts + 1,
+    MAX_NOTIFICATION_ATTEMPTS,
+  );
   const message =
     emptyRecipientReason ??
     "审批通知没有可投递的真实私信收件人，已停止本轮发送；请检查审批角色和用户配置。";
@@ -98,7 +104,10 @@ async function failOutboxWithNoRecipients(
   await coordinateOutboxRecipientsForClaim(row.id, [], claim, {
     status: "FAILED",
     lastError: message,
-    nextRunAt: nextNotificationRetryAt(attempts),
+    nextRunAt:
+      attempts >= MAX_NOTIFICATION_ATTEMPTS
+        ? FROZEN_NOTIFICATION_NEXT_RUN_AT
+        : nextNotificationRetryAt(attempts),
   });
 }
 
@@ -110,6 +119,10 @@ async function sendOutboxRecipient(
 ) {
   if (!(await renewOutboxClaim(row.id, outboxClaim))) return;
   const lockedUntil = nextNotificationClaimExpiry();
+  const attempts = Math.min(
+    recipient.attempts + 1,
+    MAX_NOTIFICATION_ATTEMPTS,
+  );
   const claimed = await prisma.notificationOutboxRecipient.updateMany({
     where: {
       id: recipient.id,
@@ -124,14 +137,13 @@ async function sendOutboxRecipient(
     },
     data: {
       status: "PROCESSING",
-      attempts: { increment: 1 },
+      attempts,
       lockedUntil,
       lastError: "",
     },
   });
   if (claimed.count !== 1) return;
 
-  const attempts = recipient.attempts + 1;
   const claim = { attempts, lockedUntil };
   try {
     const target = await withClaimHeartbeat(
@@ -204,7 +216,7 @@ async function sendOutboxRecipient(
         status: "FAILED",
         attempts: nonRetryable ? MAX_NOTIFICATION_ATTEMPTS : attempts,
         lastError: message.slice(0, 1000),
-        nextRunAt: nonRetryable
+        nextRunAt: nonRetryable || attempts >= MAX_NOTIFICATION_ATTEMPTS
           ? FROZEN_NOTIFICATION_NEXT_RUN_AT
           : nextNotificationRetryAt(attempts),
         lockedUntil: null,

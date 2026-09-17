@@ -82,7 +82,7 @@ test("项目管理飞书传输只在 notification channel adapter 内启用", as
 
 test("通知生产 Server Action 在事务提交后触发即时 outbox drain", async () => {
   const expectedCalls = new Map([
-    ["app/actions/project-management/tasks.ts", 3],
+    ["app/actions/project-management/tasks.ts", 4],
     ["app/actions/project-management/projects.ts", 1],
     ["app/actions/project-management/revisions.ts", 1],
     ["app/actions/project-management/collaboration.ts", 1],

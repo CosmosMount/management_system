@@ -16,8 +16,9 @@ import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
-import { itemKindNeedsImage } from "@/lib/purchase-item-kind";
+import { serializeItemReferenceImagePaths } from "@/lib/purchase-item-images";
 import {
+  assertItemImagesPresent,
   createOrderSchema,
   parseOrderFormData,
   toStoredPurchaseItem,
@@ -63,11 +64,7 @@ async function createOrderLogged(formData: FormData, userOpenId: string) {
     await requireInitiatorSignature(userOpenId);
   }
   const { itemImages } = parseOrderFormData(formData);
-  parsed.items.forEach((item, index) => {
-    if (itemKindNeedsImage(item.itemKind) && !itemImages.has(index)) {
-      throw new Error("加工费须上传对应图片");
-    }
-  });
+  assertItemImagesPresent(parsed.items, itemImages);
 
   const user = await prisma.user.findUnique({
     where: { openId: userOpenId },
@@ -88,7 +85,10 @@ async function createOrderLogged(formData: FormData, userOpenId: string) {
   });
   const preparedItems = storedItems.map((item, index) => ({
     ...item,
-    referenceImagePath: preparedImages.referenceImagePaths[index],
+    referenceImagePath: preparedImages.referenceImagePaths[index]?.[0] ?? null,
+    referenceImagePaths: serializeItemReferenceImagePaths(
+      preparedImages.referenceImagePaths[index] ?? [],
+    ),
   }));
   const stagedUploadPaths = preparedImages.stagedUploadPaths;
   const cleanupStagedUploads = () =>

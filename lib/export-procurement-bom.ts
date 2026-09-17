@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import type { TeamOption } from "@/lib/constants";
 import { TEAM_OPTIONS } from "@/lib/constants";
 import { formatPurchaseItemKind } from "@/lib/purchase-item-kind";
+import { resolveItemReferenceImagePaths } from "@/lib/purchase-item-images";
 import type { SummaryRow } from "@/lib/procurement-summary-types";
 
 const teamOrder = new Map<string, number>(
@@ -12,10 +13,13 @@ function formatReference(row: SummaryRow): string {
   if (row.purchaseLink) {
     return row.purchaseLink;
   }
-  return row.referenceImagePath || "";
+  return resolveItemReferenceImagePaths(
+    row.referenceImagePaths,
+    row.referenceImagePath,
+  ).join("\n");
 }
 
-function toSheetRow(row: SummaryRow) {
+export function toProcurementBomSheetRow(row: SummaryRow) {
   return {
     车组: row.team,
     技术组: row.techGroup,
@@ -59,7 +63,7 @@ export function filterBomRowsByTeam(
 }
 
 function downloadRowsAsXlsx(rows: SummaryRow[], filename: string) {
-  const sheet = XLSX.utils.json_to_sheet(rows.map(toSheetRow));
+  const sheet = XLSX.utils.json_to_sheet(rows.map(toProcurementBomSheetRow));
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "BOM");
   XLSX.writeFile(workbook, filename);

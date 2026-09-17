@@ -55,7 +55,7 @@
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
 - `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 构造交互卡并通过统一私信传输层投递，Milestone/Revision/Terminal 待审批使用审批机器人，其他事件使用通知机器人；Revision 待审批在投递前额外校验当前状态和审批轮次，取消或旧轮次会转为取消投递。
-- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人时不能把已成功收件人再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
+- 通知 outbox 以 `NotificationOutbox` 表示业务事件、`NotificationOutboxRecipient` 表示单个收件人的投递状态；可聚合的项目普通私信额外用 `NotificationDeliveryBatch` 表示一次真实外发，源事件和 recipient 仍逐条保留。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调、聚合批次与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人或批次时不能把已成功内容再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 - 浏览器共享契约位于 `lib/project-management/composer-contract.ts` 与 `lib/project-management/time-canvas/`，服务端领域和查询不得从 `components/` 或带 `"use client"` 的模块反向导入类型或实现。`npm run check:dependencies` 使用 TypeScript AST 校验传递依赖边界、浏览器契约的服务端依赖、outbox 核心业务依赖，并从 Next 路由、脚本、测试和根配置入口遍历后拒绝 `components/`/`lib/` 中不可达的源码。
 
 ## 前端版本与资源更新
@@ -87,7 +87,7 @@
 
 ### 已知框架治理项
 
-- Web 进程中的 `drainNotificationOutboxSoon()` 只提供事务提交后的低延迟、best-effort 触发，不承担可靠调度；进程退出、执行失败和积压消息仍必须由 cron/worker 接管。
+- Web 进程中的 `drainNotificationOutboxSoon()` 只提供事务提交后的低延迟、best-effort 触发，不承担可靠调度；项目普通通知的聚合批次还必须等待持久化窗口截止。进程退出、执行失败和积压消息仍由每 5 秒 cron/worker 接管。
 - outbox claim 使用查询时的 `status/attempts/lockedUntil` 与可投递时间进行条件更新；收件人外部发送期间定时在同一事务续租父 outbox 与 recipient，所有完成/失败回写继续以最新 `attempts + lockedUntil` fencing，避免旧 worker 覆盖新租约或慢请求触发重复投递。
 - channel adapter 必须固化业务 payload 与收件人计划；不要在 outbox 核心或飞书传输层增加业务分支。
 - 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式确认（例如既有 `APPLY_*=true` 或受控 `--apply` 参数）和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
@@ -154,12 +154,12 @@ Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在�
 | `User` | 采购报销资料，通过 `accountId` 关联统一账号 |
 | `UserRole` | 报销角色分配、范围及授予/撤销历史 |
 | `PurchaseOrder` | 采购主单 |
-| `PurchaseItem` | 明细（含购买链接） |
+| `PurchaseItem` | 明细（含购买链接，以及加工费参考图片路径集合与旧单图兼容字段） |
 | `ProcurementBudgetPool` | 采购预算池存储行：项目（description）+兵种组+兼容技术方向+周期唯一；业务读取按兵种组+周期汇总，技术方向仅兼容历史数据 |
 
-**采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片。
+**采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片；每条加工费明细最多保留 9 张参考图，单次新增图片总量不超过 50MB。
 
-新建采购申请会先使用预分配的订单 ID 安全写入全部图片；文件准备完成后，订单、明细、最终状态与提交 outbox 才在单一事务中创建。草稿更新同样先完整暂存新图片，再以页面读取到的 `updatedAt` 做乐观版本校验，并在单一事务替换订单与明细；沿用旧图片时服务端要求路径来自当前订单现有明细，且对应 `FileAsset` 的 `orderId/kind` 匹配。文件准备阶段不会暴露中间业务状态，第二张文件失败或数据库事务失败时会清理本次暂存文件，成功后再补偿清理被替换图片。MIME 内容识别位于 `upload-mime.ts`，原子文件替换、资产登记及失败恢复位于 `upload-asset-writer.ts`，`file-upload.ts` 只保留领域上传包装和稳定公共入口。通用上传补偿会执行两次即时幂等清理；持续失败时在 `FileAsset.cleanupRequestedAt/cleanupNextRunAt` 留下持久化任务，由 cron 每 10 分钟继续重试，避免事务失败、附件替换、管理员删除或生成文档注册失败后静默遗留文件。同一任务还会处理超过一小时的 `.tmp-*`/`.bak-*`：临时文件删除，备份在主文件缺失时恢复、主文件存在时清理。签名等固定路径资产覆盖注册失败时不会复用删除资产任务，而是把失败的新文件隔离为 `.tmp-cleanup-*`，通过绑定原 `FileAsset.writeGeneration` 的 `.restore-bak-*` 标记即时或由 cron 恢复旧文件，并保留原权限元数据；后续成功覆盖会推进写入代次，使旧恢复标记只能清理、不能回滚新文件。
+新建采购申请会先使用预分配的订单 ID 安全写入全部图片；文件准备完成后，订单、明细、最终状态与提交 outbox 才在单一事务中创建。`PurchaseItem.referenceImagePaths` 以 JSON 数组保存有序多图路径，迁移会把非空旧 `referenceImagePath` 回填为单元素数组；读取仍使用旧字段回退，新写入同步首图到旧字段以兼容既有消费者。草稿更新同样先完整暂存新图片，再以页面读取到的 `updatedAt` 做乐观版本校验，并在单一事务替换订单与明细；沿用旧图片时服务端要求每条提交路径来自当前订单现有明细，且对应 `FileAsset` 的 `orderId/kind` 匹配。文件准备阶段不会暴露中间业务状态，同一条目第二张文件失败或数据库事务失败时会清理本次暂存文件，成功后再补偿清理被移除或替换的图片。MIME 内容识别位于 `upload-mime.ts`，原子文件替换、资产登记及失败恢复位于 `upload-asset-writer.ts`，`file-upload.ts` 只保留领域上传包装和稳定公共入口。通用上传补偿会执行两次即时幂等清理；持续失败时在 `FileAsset.cleanupRequestedAt/cleanupNextRunAt` 留下持久化任务，由 cron 每 10 分钟继续重试，避免事务失败、附件替换、管理员删除或生成文档注册失败后静默遗留文件。同一任务还会处理超过一小时的 `.tmp-*`/`.bak-*`：临时文件删除，备份在主文件缺失时恢复、主文件存在时清理。签名等固定路径资产覆盖注册失败时不会复用删除资产任务，而是把失败的新文件隔离为 `.tmp-cleanup-*`，通过绑定原 `FileAsset.writeGeneration` 的 `.restore-bak-*` 标记即时或由 cron 恢复旧文件，并保留原权限元数据；后续成功覆盖会推进写入代次，使旧恢复标记只能清理、不能回滚新文件。
 
 **预算池**（`lib/procurement-budget.ts`、`lib/procurement-budget-alerts.ts`）：
 

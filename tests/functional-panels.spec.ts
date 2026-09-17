@@ -142,7 +142,13 @@ test.describe("普通用户主功能面板", () => {
 
     await page.goto("/procurement/summary", { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "明细汇总" })).toBeVisible();
-    await expect(page.getByText(/处理人：/).first()).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "状态", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "PW-FULL-DRAFT", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: "PW-FULL-REVIEW", exact: true }),
+    ).toBeVisible();
     const summaryTeamFilter = page.locator("#procurement-summary-team");
     await expect(summaryTeamFilter).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "导出该车组 BOM" }).click();
@@ -428,7 +434,16 @@ test.describe("管理员面板", () => {
     const editor = page.getByTestId(`global-time-marker-editor-${persisted.id}`);
     await expect(editor).toBeVisible();
     await editor.getByRole("button", { name: /在时间线定位/ }).click();
+    await expect(
+      page.getByTestId(`global-time-marker-line-${persisted.id}`),
+    ).toBeVisible();
     const handle = page.getByTestId(`global-time-marker-${persisted.id}`);
+    if ((await handle.count()) === 0) {
+      await markerStage.getByTestId("global-time-marker-overflow").click();
+      await page
+        .getByTestId(`global-time-marker-overflow-item-${persisted.id}`)
+        .click();
+    }
     await expect(handle).toBeVisible();
     await expect(handle).toContainText("09-18 10:30");
     const handleZIndex = await handle.evaluate((element) =>
@@ -439,7 +454,6 @@ test.describe("管理员面板", () => {
     );
     expect(todayLineZIndex).toBeGreaterThan(handleZIndex);
     await expect(page.getByText("全局关键节点")).toHaveCount(0);
-    await expect(page.getByTestId(`global-time-marker-line-${persisted.id}`)).toBeVisible();
     const beforeDrag = await editor.getByLabel("时间（上海）").inputValue();
     await dragTimelineMarker(page, handle, 45);
     await expect(editor.getByLabel("时间（上海）")).not.toHaveValue(beforeDrag);
@@ -459,7 +473,7 @@ test.describe("管理员面板", () => {
     await expect(page).toHaveURL(/\/admin\/time-markers$/);
     await page.goBack();
     await expect(page).toHaveURL(/\/admin\/time-markers$/);
-    await dragTimelineMarker(page, handle, 45);
+    await dragTimelineMarker(page, handle, 45, { expectActive: false });
     await expect(editor.getByLabel("时间（上海）")).toHaveValue(pendingValue);
     await expect(page.getByText("有未保存修改")).toHaveCount(0);
     await page.unroute("**/admin/time-markers");
@@ -1223,8 +1237,12 @@ async function dragTimelineMarker(
   page: Page,
   marker: Locator,
   deltaX: number,
+  { expectActive = true }: { expectActive?: boolean } = {},
 ) {
   await marker.scrollIntoViewIfNeeded();
+  if (expectActive) {
+    await marker.hover();
+  }
   const box = await marker.boundingBox();
   if (!box) throw new Error("无法读取关键时间点拖动位置");
   const start = {
@@ -1234,6 +1252,9 @@ async function dragTimelineMarker(
 
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
+  if (expectActive) {
+    await expect(marker).toHaveCSS("cursor", "grabbing");
+  }
   await page.mouse.move(start.x + deltaX, start.y, { steps: 5 });
   await page.mouse.up();
 }

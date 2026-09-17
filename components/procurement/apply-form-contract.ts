@@ -11,7 +11,7 @@ export type OrderFormPayload = CreateOrderInput & {
   expectedUpdatedAt?: string;
 };
 
-export type ItemImageFiles = Record<number, File | undefined>;
+export type ItemImageFiles = Record<number, File[]>;
 export type ItemImageErrors = Record<number, string>;
 
 export const defaultPurchaseItem = {
@@ -19,7 +19,7 @@ export const defaultPurchaseItem = {
   spec: "",
   itemKind: "COMPONENT" as PurchaseItemKind,
   purchaseLink: "",
-  referenceImagePath: null as string | null,
+  referenceImagePaths: [] as string[],
   processingVendor: "",
   quantity: 1,
   lineTotal: 0,
@@ -31,8 +31,10 @@ export function buildOrderFormData(
 ): FormData {
   const formData = new FormData();
   formData.set("payload", JSON.stringify(data));
-  for (const [index, file] of Object.entries(itemImageFiles)) {
-    if (file) formData.set(`itemImage-${index}`, file);
+  for (const [index, files] of Object.entries(itemImageFiles)) {
+    files.forEach((file, fileIndex) => {
+      formData.append(`itemImage-${index}-${fileIndex}`, file);
+    });
   }
   return formData;
 }

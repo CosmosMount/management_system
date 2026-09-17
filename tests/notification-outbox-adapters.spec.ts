@@ -5,13 +5,19 @@ import {
   drainNotificationOutbox,
   drainNotificationOutboxSoon,
 } from "../lib/notification-delivery";
-import { enqueueNotification } from "../lib/notification-outbox";
+import {
+  cancelRetryableNotificationOutboxesTx,
+  enqueueNotification,
+  resetNotificationOutboxForRetry,
+} from "../lib/notification-outbox";
+import { MAX_NOTIFICATION_ATTEMPTS } from "../lib/notification-outbox/constants";
 import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
 import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import { projectManagementNotificationPayloadSchema, type ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 import { enqueueProjectManagementNotification, enqueueProjectManagementNotificationTx } from "../lib/project-management/notifications/events";
+import { runProjectManagementNotificationRetention } from "../lib/project-management/application/maintenance-service";
 import { prisma } from "../lib/prisma";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
@@ -46,6 +52,8 @@ test.describe("notification outbox channel adapters", () => {
   const originalProcurementWebhookSecret =
     process.env.FEISHU_PROCUREMENT_WEBHOOK_SECRET;
   const originalTestLockMs = process.env.NOTIFICATION_OUTBOX_TEST_LOCK_MS;
+  const originalAggregationWindow =
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS;
   let sendAttempts: string[];
   let webhookAttempts: number;
   let failRecipientOnce: string | null;
@@ -53,6 +61,10 @@ test.describe("notification outbox channel adapters", () => {
   let authAppIds: string[];
   let directMessageBodies: Array<Record<string, unknown>>;
   let cardKitCards: Array<Record<string, unknown>>;
+  let deliveryPauses: Map<string, {
+    started: () => void;
+    waitForRelease: Promise<void>;
+  }>;
 
   test.beforeAll(() => {
     originalFeedbackRecipientResolver =
@@ -62,6 +74,7 @@ test.describe("notification outbox channel adapters", () => {
   test.beforeEach(async () => {
     assertTestDatabase();
     await prisma.notificationOutbox.deleteMany();
+    await prisma.notificationDeliveryBatch.deleteMany();
     await Promise.all(
       ACTIVE_RECIPIENT_OPEN_IDS.map(ensureActiveFeishuRecipient),
     );
@@ -77,6 +90,8 @@ test.describe("notification outbox channel adapters", () => {
     process.env.FEISHU_PROCUREMENT_WEBHOOK_URL =
       "https://open.feishu.cn/open-apis/bot/v2/hook/mock-outbox";
     delete process.env.FEISHU_PROCUREMENT_WEBHOOK_SECRET;
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "0";
     sendAttempts = [];
     webhookAttempts = 0;
     failRecipientOnce = null;
@@ -84,6 +99,7 @@ test.describe("notification outbox channel adapters", () => {
     authAppIds = [];
     directMessageBodies = [];
     cardKitCards = [];
+    deliveryPauses = new Map();
 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
@@ -111,6 +127,12 @@ test.describe("notification outbox channel adapters", () => {
         };
         directMessageBodies.push(body);
         sendAttempts.push(body.receive_id);
+        const pause = deliveryPauses.get(body.receive_id);
+        if (pause) {
+          deliveryPauses.delete(body.receive_id);
+          pause.started();
+          await pause.waitForRelease;
+        }
         if (failRecipientOnce === body.receive_id) {
           failRecipientOnce = null;
           return jsonResponse({ code: 500, msg: "temporary failure" });
@@ -161,8 +183,15 @@ test.describe("notification outbox channel adapters", () => {
       originalProcurementWebhookSecret,
     );
     restoreEnv("NOTIFICATION_OUTBOX_TEST_LOCK_MS", originalTestLockMs);
+    restoreEnv(
+      "PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS",
+      originalAggregationWindow,
+    );
     await prisma.notificationOutbox.deleteMany({
       where: { eventKey: { startsWith: EVENT_PREFIX } },
+    });
+    await prisma.notificationDeliveryBatch.deleteMany({
+      where: { recipients: { none: {} } },
     });
     await prisma.procurementFeishuCard.deleteMany({
       where: { orderId: { startsWith: "outbox-adapter-order-" } },
@@ -489,7 +518,7 @@ test.describe("notification outbox channel adapters", () => {
     ]);
   });
 
-  test("过期 outbox 与收件人锁会恢复投递", async () => {
+  test("达到重试上限的过期 outbox 与收件人租约仍会恢复投递", async () => {
     const eventKey = `${EVENT_PREFIX}expired-lock`;
     await enqueueNotification({
       eventKey,
@@ -512,14 +541,18 @@ test.describe("notification outbox channel adapters", () => {
     await prisma.$transaction([
       prisma.notificationOutbox.update({
         where: { id: row.id },
-        data: { status: "PROCESSING", lockedUntil: new Date(0) },
+        data: {
+          status: "PROCESSING",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          lockedUntil: new Date(0),
+        },
       }),
       prisma.notificationOutboxRecipient.create({
         data: {
           outboxId: row.id,
           openId: "ou_outbox_success",
           status: "PROCESSING",
-          attempts: 1,
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
           lockedUntil: new Date(0),
           nextRunAt: new Date(0),
         },
@@ -535,7 +568,7 @@ test.describe("notification outbox channel adapters", () => {
     });
     expect(sent.status).toBe("SENT");
     expect(sent.recipients).toMatchObject([
-      { status: "SENT", attempts: 2 },
+      { status: "SENT", attempts: MAX_NOTIFICATION_ATTEMPTS },
     ]);
     expect(sendAttempts).toEqual(["ou_outbox_success"]);
   });
@@ -1176,6 +1209,1249 @@ test.describe("notification outbox channel adapters", () => {
     });
   });
 
+  test("项目管理普通通知按收件人和类别并发聚合，单条批次保持原卡片", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const taskKeys = [
+      `${EVENT_PREFIX}aggregation-task-a`,
+      `${EVENT_PREFIX}aggregation-task-b`,
+    ];
+    await Promise.all(
+      taskKeys.map((eventKey, index) =>
+        enqueueProjectManagementNotification({
+          eventKey,
+          type: "task_updated",
+          payload: projectManagementPayload({
+            kind: "task_updated",
+            category: "TASK",
+            entityType: "Task",
+            entityId: `aggregation-task-${index}`,
+            taskId: `aggregation-task-${index}`,
+            taskTitle: `聚合任务 ${index + 1}`,
+            title: `任务更新 ${index + 1}`,
+            summary: `聚合明细 ${index + 1}`,
+            actorName: `聚合操作人 ${index + 1}`,
+            mandatory: false,
+            context: index === 0 ? { afterStatus: "ACTIVE" } : {},
+          }),
+        }),
+      ),
+    );
+    const projectKey = `${EVENT_PREFIX}aggregation-project`;
+    await enqueueProjectManagementNotification({
+      eventKey: projectKey,
+      type: "project_updated",
+      payload: projectManagementPayload({
+        kind: "project_updated",
+        category: "PROJECT",
+        entityType: "Project",
+        entityId: "aggregation-project",
+        projectId: "aggregation-project",
+        projectName: "聚合项目",
+        title: "项目信息更新",
+        summary: "项目单条明细",
+        mandatory: false,
+      }),
+    });
+
+    const rows = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: [...taskKeys, projectKey] } },
+      include: { recipients: true },
+      orderBy: { eventKey: "asc" },
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.deliveryMode === "AGGREGATED")).toBe(true);
+    expect(rows.every((row) => row.recipients.length === 1)).toBe(true);
+    const taskBatchIds = rows
+      .filter((row) => taskKeys.includes(row.eventKey))
+      .map((row) => row.recipients[0]!.deliveryBatchId)
+      .filter((id): id is string => Boolean(id));
+    expect(taskBatchIds).toHaveLength(2);
+    expect(new Set(taskBatchIds).size).toBe(1);
+    const projectBatchId = rows.find((row) => row.eventKey === projectKey)!
+      .recipients[0]!.deliveryBatchId;
+    if (!projectBatchId) throw new Error("项目通知缺少聚合批次");
+    expect(projectBatchId).not.toBe(taskBatchIds[0]);
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { id: { in: [...new Set([...taskBatchIds, projectBatchId])] } },
+      data: { nextRunAt: new Date(0) },
+    });
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(2);
+    expect(directMessageBodies).toHaveLength(2);
+    const cards = directMessageBodies.map((body) =>
+      JSON.stringify(JSON.parse(String(body.content))),
+    );
+    const digest = cards.find((card) => card.includes("任务通知汇总（2 条）"));
+    expect(digest).toContain("聚合明细 1");
+    expect(digest).toContain("聚合明细 2");
+    expect(digest).toContain("操作人：聚合操作人 1");
+    expect(digest).toContain("变更后状态：进行中");
+    expect(digest).toContain("查看全部通知");
+    const singleton = cards.find((card) => card.includes("项目单条明细"));
+    expect(singleton).toContain("查看详情");
+    expect(singleton).not.toContain("通知汇总");
+
+    const completed = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: [...taskKeys, projectKey] } },
+      include: { recipients: true },
+    });
+    expect(completed.every((row) => row.status === "SENT")).toBe(true);
+    expect(
+      completed.every((row) => row.recipients[0]?.status === "SENT"),
+    ).toBe(true);
+  });
+
+  test("审批、强制通知和每日总结在聚合窗口开启时仍逐条投递", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const cases: Array<{
+      eventKey: string;
+      type: ProjectManagementNotificationPayload["kind"];
+      payload: ProjectManagementNotificationPayload;
+    }> = [
+      {
+        eventKey: `${EVENT_PREFIX}aggregation-excluded-mandatory`,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: "aggregation-excluded-mandatory",
+          mandatory: true,
+        }),
+      },
+      {
+        eventKey: `${EVENT_PREFIX}aggregation-excluded-approval`,
+        type: "revision_pending_review",
+        payload: projectManagementPayload({
+          kind: "revision_pending_review",
+          purpose: "approval_request",
+          category: "REVISION",
+          entityType: "RevisionNode",
+          entityId: "aggregation-excluded-approval",
+          mandatory: true,
+        }),
+      },
+      ...[
+        "project_management_global_summary_daily",
+        "project_management_personal_summary_daily",
+      ].map((kind, index) => ({
+        eventKey: `${EVENT_PREFIX}aggregation-excluded-summary-${index}`,
+        type: kind as ProjectManagementNotificationPayload["kind"],
+        payload: projectManagementPayload({
+          kind: kind as ProjectManagementNotificationPayload["kind"],
+          category: "PROJECT",
+          entityType: index === 0 ? "AdminGlobalSummaryRun" : "PersonalSummary",
+          entityId: `aggregation-excluded-summary-${index}`,
+        }),
+      })),
+    ];
+    for (const item of cases) {
+      await enqueueProjectManagementNotification(item);
+    }
+    const rows = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: cases.map((item) => item.eventKey) } },
+      include: { recipients: true },
+    });
+    expect(rows).toHaveLength(cases.length);
+    expect(rows.every((row) => row.deliveryMode === "DIRECT")).toBe(true);
+    expect(rows.every((row) => row.recipients.length === 0)).toBe(true);
+    expect(
+      await prisma.notificationDeliveryBatch.count({
+        where: {
+          recipients: {
+            some: { outbox: { eventKey: { in: cases.map((item) => item.eventKey) } } },
+          },
+        },
+      }),
+    ).toBe(0);
+  });
+
+  test("聚合投递会在收件人停用时取消整批且不发送", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKeys = [
+      `${EVENT_PREFIX}aggregation-inactive-a`,
+      `${EVENT_PREFIX}aggregation-inactive-b`,
+    ];
+    for (const [index, eventKey] of eventKeys.entries()) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: `aggregation-inactive-${index}`,
+          taskId: `aggregation-inactive-${index}`,
+          taskTitle: `停用收件人任务 ${index + 1}`,
+        }),
+      });
+    }
+    const identity = await prisma.accountIdentity.findUniqueOrThrow({
+      where: {
+        provider_tenantId_openId: {
+          provider: "FEISHU",
+          tenantId: "default",
+          openId: "ou_outbox_success",
+        },
+      },
+      select: { accountId: true },
+    });
+    await prisma.person.update({
+      where: { accountId: identity.accountId },
+      data: { status: "INACTIVE" },
+    });
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { recipients: { some: { outbox: { eventKey: { in: eventKeys } } } } },
+      data: { nextRunAt: new Date(0) },
+    });
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    expect(sendAttempts).toEqual([]);
+    const batch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: { recipients: { some: { outbox: { eventKey: eventKeys[0] } } } },
+      include: { recipients: { include: { outbox: true } } },
+    });
+    expect(batch.status).toBe("CANCELED");
+    expect(batch.recipients.every((item) => item.status === "CANCELED")).toBe(
+      true,
+    );
+    expect(
+      batch.recipients.every((item) => item.outbox.status === "CANCELED"),
+    ).toBe(true);
+  });
+
+  test("聚合投递遵守禁发开关和私信 allowlist，拒绝时不标记成功", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKey = `${EVENT_PREFIX}aggregation-delivery-guards`;
+    await enqueueProjectManagementNotification({
+      eventKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-delivery-guards",
+        taskId: "aggregation-delivery-guards",
+        taskTitle: "聚合投递保护",
+      }),
+    });
+    const batch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: { recipients: { some: { outbox: { eventKey } } } },
+    });
+    await prisma.notificationDeliveryBatch.update({
+      where: { id: batch.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+    expect(await drainNotificationOutbox(20)).toBe(0);
+    expect(
+      await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "PENDING" });
+
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = "ou_outbox_retry";
+    expect(await drainNotificationOutbox(20)).toBe(0);
+    expect(sendAttempts).toEqual([]);
+    const refused = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      include: { recipients: { include: { outbox: true } } },
+    });
+    expect(refused.status).toBe("FAILED");
+    expect(refused.recipients[0]?.status).toBe("FAILED");
+    expect(refused.recipients[0]?.outbox.status).toBe("FAILED");
+  });
+
+  test("项目管理聚合批次失败后整体重试且不拆成逐条消息", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKeys = [
+      `${EVENT_PREFIX}aggregation-retry-a`,
+      `${EVENT_PREFIX}aggregation-retry-b`,
+    ];
+    for (const [index, eventKey] of eventKeys.entries()) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: `aggregation-retry-${index}`,
+          taskId: `aggregation-retry-${index}`,
+          taskTitle: `聚合重试任务 ${index + 1}`,
+          title: `聚合重试 ${index + 1}`,
+          summary: `聚合重试明细 ${index + 1}`,
+          mandatory: false,
+        }),
+      });
+    }
+    const batch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: {
+        recipients: { some: { outbox: { eventKey: eventKeys[0] } } },
+      },
+    });
+    await prisma.notificationDeliveryBatch.update({
+      where: { id: batch.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    failRecipientOnce = "ou_outbox_success";
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    const failed = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      include: { recipients: true },
+    });
+    expect(failed.status).toBe("FAILED");
+    expect(failed.attempts).toBe(1);
+    expect(failed.recipients).toHaveLength(2);
+    expect(failed.recipients.every((item) => item.status === "FAILED")).toBe(
+      true,
+    );
+    expect(sendAttempts).toEqual(["ou_outbox_success"]);
+
+    await prisma.notificationDeliveryBatch.update({
+      where: { id: batch.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    sendAttempts = [];
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual(["ou_outbox_success"]);
+    const sent = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      include: { recipients: { include: { outbox: true } } },
+    });
+    expect(sent.status).toBe("SENT");
+    expect(sent.attempts).toBe(2);
+    expect(sent.recipients.every((item) => item.status === "SENT")).toBe(true);
+    expect(
+      sent.recipients.every((item) => item.outbox.status === "SENT"),
+    ).toBe(true);
+  });
+
+  test("达到重试上限的过期聚合租约仍会被接管并完成结算", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKeys = [
+      `${EVENT_PREFIX}aggregation-expired-max-a`,
+      `${EVENT_PREFIX}aggregation-expired-max-b`,
+    ];
+    for (const [index, eventKey] of eventKeys.entries()) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: `aggregation-expired-max-${index}`,
+          taskId: `aggregation-expired-max-${index}`,
+          taskTitle: `过期租约任务 ${index + 1}`,
+        }),
+      });
+    }
+    const batch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: { recipients: { some: { outbox: { eventKey: eventKeys[0] } } } },
+    });
+    await prisma.$transaction([
+      prisma.notificationDeliveryBatch.update({
+        where: { id: batch.id },
+        data: {
+          openKey: null,
+          status: "PROCESSING",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          lockedUntil: new Date(0),
+        },
+      }),
+      prisma.notificationOutboxRecipient.updateMany({
+        where: { deliveryBatchId: batch.id },
+        data: {
+          status: "PROCESSING",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          lockedUntil: new Date(0),
+        },
+      }),
+      prisma.notificationOutbox.updateMany({
+        where: { eventKey: { in: eventKeys } },
+        data: {
+          status: "PROCESSING",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+        },
+      }),
+    ]);
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    const recovered = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      include: { recipients: { include: { outbox: true } } },
+    });
+    expect(recovered.status).toBe("SENT");
+    expect(recovered.attempts).toBe(MAX_NOTIFICATION_ATTEMPTS);
+    expect(recovered.recipients.every((item) => item.status === "SENT")).toBe(
+      true,
+    );
+    expect(
+      recovered.recipients.every((item) => item.outbox.status === "SENT"),
+    ).toBe(true);
+  });
+
+  test("反序多收件人并发入队使用稳定锁顺序并按收件人隔离", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKeys = [
+      `${EVENT_PREFIX}aggregation-recipients-a`,
+      `${EVENT_PREFIX}aggregation-recipients-b`,
+    ];
+    await Promise.all([
+      enqueueProjectManagementNotification({
+        eventKey: eventKeys[0]!,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: "aggregation-recipients-a",
+          taskId: "aggregation-recipients-a",
+          taskTitle: "多收件人聚合 A",
+          recipientOpenIds: ["ou_outbox_retry", "ou_outbox_wrong_bot"],
+        }),
+      }),
+      enqueueProjectManagementNotification({
+        eventKey: eventKeys[1]!,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: "aggregation-recipients-b",
+          taskId: "aggregation-recipients-b",
+          taskTitle: "多收件人聚合 B",
+          recipientOpenIds: ["ou_outbox_wrong_bot", "ou_outbox_retry"],
+        }),
+      }),
+    ]);
+
+    const outboxes = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: eventKeys } },
+      include: { recipients: true },
+    });
+    expect(outboxes).toHaveLength(2);
+    expect(outboxes.every((row) => row.recipients.length === 2)).toBe(true);
+    const batches = await prisma.notificationDeliveryBatch.findMany({
+      where: { recipients: { some: { outbox: { eventKey: { in: eventKeys } } } } },
+      include: { recipients: true },
+    });
+    expect(batches).toHaveLength(2);
+    expect(batches.map((batch) => batch.recipientOpenId).sort()).toEqual([
+      "ou_outbox_retry",
+      "ou_outbox_wrong_bot",
+    ]);
+    expect(batches.every((batch) => batch.recipients.length === 2)).toBe(true);
+
+    const retryBatch = batches.find(
+      (batch) => batch.recipientOpenId === "ou_outbox_retry",
+    );
+    if (!retryBatch?.openKey) throw new Error("交叉锁顺序测试缺少 openKey");
+    const baselineWaiters = await waitingAdvisoryLockCount();
+    let signalLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      signalLockHeld = resolve;
+    });
+    let releaseLock!: () => void;
+    const waitForLockRelease = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const holdingLock = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT 1 AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(hashtextextended(${retryBatch.openKey}, 0))
+          ) AS "notificationAggregationLock"
+        `;
+        signalLockHeld();
+        await waitForLockRelease;
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+    const thirdKey = `${EVENT_PREFIX}aggregation-recipients-c`;
+    const enqueueThird = enqueueProjectManagementNotification({
+      eventKey: thirdKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-recipients-c",
+        taskId: "aggregation-recipients-c",
+        taskTitle: "多收件人聚合 C",
+        recipientOpenIds: ["ou_outbox_retry", "ou_outbox_wrong_bot"],
+      }),
+    });
+    await expect.poll(waitingAdvisoryLockCount).toBeGreaterThan(baselineWaiters);
+    const cancelFirst = prisma.$transaction((tx) =>
+      cancelRetryableNotificationOutboxesTx(
+        tx,
+        [eventKeys[0]!],
+        "测试多批次取消锁顺序",
+      ),
+    );
+    try {
+      await expect
+        .poll(waitingAdvisoryLockCount)
+        .toBeGreaterThanOrEqual(baselineWaiters + 2);
+    } finally {
+      releaseLock();
+      await holdingLock;
+    }
+    await enqueueThird;
+    expect(await cancelFirst).toBe(1);
+    expect(
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: thirdKey },
+        include: { recipients: true },
+      }),
+    ).toMatchObject({ status: "PENDING", recipients: [{}, {}] });
+  });
+
+  test("不同收件人批次并发成功后父 outbox 汇总为成功", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKey = `${EVENT_PREFIX}aggregation-concurrent-success`;
+    await enqueueProjectManagementNotification({
+      eventKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-concurrent-success",
+        taskId: "aggregation-concurrent-success",
+        taskTitle: "并发结算成功任务",
+        recipientOpenIds: ["ou_outbox_success", "ou_outbox_retry"],
+      }),
+    });
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { recipients: { some: { outbox: { eventKey } } } },
+      data: { nextRunAt: new Date(0) },
+    });
+    let startedCount = 0;
+    let signalBothStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      signalBothStarted = resolve;
+    });
+    let releaseBoth!: () => void;
+    const waitForRelease = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    for (const recipientOpenId of ["ou_outbox_success", "ou_outbox_retry"]) {
+      deliveryPauses.set(recipientOpenId, {
+        started: () => {
+          startedCount += 1;
+          if (startedCount === 2) signalBothStarted();
+        },
+        waitForRelease,
+      });
+    }
+    const workers = [
+      drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+      drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ];
+    await bothStarted;
+    releaseBoth();
+    expect((await Promise.all(workers)).reduce((sum, count) => sum + count, 0)).toBe(
+      2,
+    );
+    const sent = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: { include: { deliveryBatch: true } } },
+    });
+    expect(sent.status).toBe("SENT");
+    expect(sent.recipients.every((recipient) => recipient.status === "SENT")).toBe(
+      true,
+    );
+    expect(
+      sent.recipients.every(
+        (recipient) => recipient.deliveryBatch?.status === "SENT",
+      ),
+    ).toBe(true);
+  });
+
+  test("不同收件人批次成功与终止失败并发结算后父 outbox 可人工恢复", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKey = `${EVENT_PREFIX}aggregation-concurrent-final-failure`;
+    await enqueueProjectManagementNotification({
+      eventKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-concurrent-final-failure",
+        taskId: "aggregation-concurrent-final-failure",
+        taskTitle: "并发结算终止失败任务",
+        recipientOpenIds: ["ou_outbox_success", "ou_outbox_retry"],
+      }),
+    });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: { include: { deliveryBatch: true } } },
+    });
+    const failingRecipient = outbox.recipients.find(
+      (recipient) => recipient.openId === "ou_outbox_retry",
+    );
+    if (!failingRecipient?.deliveryBatchId) {
+      throw new Error("并发终止失败测试缺少收件人批次");
+    }
+    await prisma.$transaction([
+      prisma.notificationDeliveryBatch.updateMany({
+        where: { recipients: { some: { outboxId: outbox.id } } },
+        data: { nextRunAt: new Date(0) },
+      }),
+      prisma.notificationDeliveryBatch.update({
+        where: { id: failingRecipient.deliveryBatchId },
+        data: { attempts: MAX_NOTIFICATION_ATTEMPTS - 1 },
+      }),
+      prisma.notificationOutboxRecipient.update({
+        where: { id: failingRecipient.id },
+        data: { attempts: MAX_NOTIFICATION_ATTEMPTS - 1 },
+      }),
+    ]);
+    let startedCount = 0;
+    let signalBothStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      signalBothStarted = resolve;
+    });
+    let releaseBoth!: () => void;
+    const waitForRelease = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    for (const recipientOpenId of ["ou_outbox_success", "ou_outbox_retry"]) {
+      deliveryPauses.set(recipientOpenId, {
+        started: () => {
+          startedCount += 1;
+          if (startedCount === 2) signalBothStarted();
+        },
+        waitForRelease,
+      });
+    }
+    failRecipientOnce = "ou_outbox_retry";
+    const workers = [
+      drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+      drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ];
+    await bothStarted;
+    releaseBoth();
+    expect((await Promise.all(workers)).reduce((sum, count) => sum + count, 0)).toBe(
+      1,
+    );
+
+    const settled = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { id: outbox.id },
+      include: { recipients: { include: { deliveryBatch: true } } },
+    });
+    expect(settled.status).toBe("FAILED");
+    expect(settled.attempts).toBe(MAX_NOTIFICATION_ATTEMPTS);
+    expect(
+      settled.recipients.find((recipient) => recipient.openId === "ou_outbox_success")
+        ?.status,
+    ).toBe("SENT");
+    expect(
+      settled.recipients.find((recipient) => recipient.openId === "ou_outbox_retry")
+        ?.status,
+    ).toBe("FAILED");
+    expect(
+      await resetNotificationOutboxForRetry({
+        id: outbox.id,
+        channel: outbox.channel,
+        type: outbox.type,
+      }),
+    ).toEqual({ count: 1 });
+    sendAttempts = [];
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual(["ou_outbox_retry"]);
+    expect(
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { id: outbox.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "SENT" });
+  });
+
+  test("聚合批次达到重试上限后人工重置会恢复整个批次", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKeys = [
+      `${EVENT_PREFIX}aggregation-manual-retry-a`,
+      `${EVENT_PREFIX}aggregation-manual-retry-b`,
+    ];
+    for (const [index, eventKey] of eventKeys.entries()) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: `aggregation-manual-retry-${index}`,
+          taskId: `aggregation-manual-retry-${index}`,
+          taskTitle: `人工重试任务 ${index + 1}`,
+        }),
+      });
+    }
+    const first = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: eventKeys[0] },
+      include: { recipients: true },
+    });
+    const batchId = first.recipients[0]?.deliveryBatchId;
+    if (!batchId) throw new Error("人工重试测试缺少聚合批次");
+    await prisma.$transaction([
+      prisma.notificationDeliveryBatch.update({
+        where: { id: batchId },
+        data: {
+          openKey: null,
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试终止失败",
+        },
+      }),
+      prisma.notificationOutboxRecipient.updateMany({
+        where: { deliveryBatchId: batchId },
+        data: {
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试终止失败",
+        },
+      }),
+      prisma.notificationOutbox.updateMany({
+        where: { eventKey: { in: eventKeys } },
+        data: {
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试终止失败",
+        },
+      }),
+    ]);
+
+    expect(
+      await resetNotificationOutboxForRetry({
+        id: first.id,
+        channel: first.channel,
+        type: first.type,
+      }),
+    ).toEqual({ count: 1 });
+    const resetBatch = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batchId },
+      include: { recipients: { include: { outbox: true } } },
+    });
+    expect(resetBatch).toMatchObject({ status: "PENDING", attempts: 0 });
+    expect(resetBatch.recipients.every((item) => item.status === "PENDING")).toBe(
+      true,
+    );
+    expect(
+      resetBatch.recipients.every((item) => item.outbox.status === "PENDING"),
+    ).toBe(true);
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual(["ou_outbox_success"]);
+  });
+
+  test("旧终止失败聚合通知人工重置与保留清理并发时不会被删除", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKey = `${EVENT_PREFIX}aggregation-reset-retention-race`;
+    await enqueueProjectManagementNotification({
+      eventKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-reset-retention-race",
+        taskId: "aggregation-reset-retention-race",
+        taskTitle: "人工恢复与保留清理竞态",
+      }),
+    });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: true },
+    });
+    const batchId = outbox.recipients[0]?.deliveryBatchId;
+    if (!batchId) throw new Error("保留清理竞态测试缺少聚合批次");
+    const old = new Date("2025-01-01T00:00:00.000Z");
+    await prisma.$transaction([
+      prisma.notificationDeliveryBatch.update({
+        where: { id: batchId },
+        data: {
+          openKey: null,
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试旧终止失败",
+          updatedAt: old,
+        },
+      }),
+      prisma.notificationOutboxRecipient.updateMany({
+        where: { deliveryBatchId: batchId },
+        data: {
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试旧终止失败",
+          updatedAt: old,
+        },
+      }),
+      prisma.notificationOutbox.update({
+        where: { id: outbox.id },
+        data: {
+          status: "FAILED",
+          attempts: MAX_NOTIFICATION_ATTEMPTS,
+          nextRunAt: new Date("9999-12-31T00:00:00.000Z"),
+          lastError: "测试旧终止失败",
+          updatedAt: old,
+        },
+      }),
+    ]);
+
+    const baselineWaiters = await waitingDatabaseLockCount();
+    let signalParentLocked!: () => void;
+    const parentLocked = new Promise<void>((resolve) => {
+      signalParentLocked = resolve;
+    });
+    let releaseParent!: () => void;
+    const waitForParentRelease = new Promise<void>((resolve) => {
+      releaseParent = resolve;
+    });
+    const holdingParent = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT "id"
+          FROM "NotificationOutbox"
+          WHERE "id" = ${outbox.id}
+          FOR UPDATE
+        `;
+        signalParentLocked();
+        await waitForParentRelease;
+      },
+      { timeout: 15_000 },
+    );
+    await parentLocked;
+    const resetting = resetNotificationOutboxForRetry({
+      id: outbox.id,
+      channel: outbox.channel,
+      type: outbox.type,
+    });
+    await expect.poll(waitingDatabaseLockCount).toBeGreaterThan(baselineWaiters);
+    const retaining = runProjectManagementNotificationRetention(
+      new Date("2026-09-16T00:00:00.000Z"),
+      5_000,
+    );
+    try {
+      await expect
+        .poll(waitingDatabaseLockCount)
+        .toBeGreaterThanOrEqual(baselineWaiters + 2);
+    } finally {
+      releaseParent();
+      await holdingParent;
+    }
+    expect(await resetting).toEqual({ count: 1 });
+    expect((await retaining).deletedOutboxCount).toBe(0);
+    expect(
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { id: outbox.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "PENDING" });
+    expect(
+      await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+        where: { id: batchId },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "PENDING" });
+  });
+
+  test("聚合批次外发期间拒绝并发取消且不覆盖有效租约", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const eventKey = `${EVENT_PREFIX}aggregation-cancel-processing`;
+    await enqueueProjectManagementNotification({
+      eventKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-cancel-processing",
+        taskId: "aggregation-cancel-processing",
+        taskTitle: "投递中取消保护",
+      }),
+    });
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { recipients: { some: { outbox: { eventKey } } } },
+      data: { nextRunAt: new Date(0) },
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let releaseDelivery!: () => void;
+    const waitForRelease = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    deliveryPauses.set("ou_outbox_success", {
+      started: signalStarted,
+      waitForRelease,
+    });
+    const draining = drainNotificationOutbox(20, {
+      ignoreDeliveryDisabled: true,
+    });
+    await started;
+    try {
+      await expect(
+        prisma.$transaction((tx) =>
+          cancelRetryableNotificationOutboxesTx(
+            tx,
+            [eventKey],
+            "测试取消投递中的聚合通知",
+          ),
+        ),
+      ).rejects.toThrow("聚合通知正在投递");
+    } finally {
+      releaseDelivery();
+    }
+    expect(await draining).toBe(1);
+    const completed = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: { include: { deliveryBatch: true } } },
+    });
+    expect(completed.status).toBe("SENT");
+    expect(completed.recipients[0]?.status).toBe("SENT");
+    expect(completed.recipients[0]?.deliveryBatch?.status).toBe("SENT");
+  });
+
+  test("人工重置失败批次不会复活同批次已取消事件", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const canceledKey = `${EVENT_PREFIX}aggregation-canceled-member`;
+    const retryKey = `${EVENT_PREFIX}aggregation-retry-member`;
+    for (const [eventKey, taskTitle] of [
+      [canceledKey, "已取消成员"],
+      [retryKey, "待重试成员"],
+    ] as const) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: eventKey,
+          taskId: eventKey,
+          taskTitle,
+        }),
+      });
+    }
+    const retryOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: retryKey },
+      include: { recipients: true },
+    });
+    const batchId = retryOutbox.recipients[0]?.deliveryBatchId;
+    if (!batchId) throw new Error("取消成员隔离测试缺少聚合批次");
+    await prisma.notificationDeliveryBatch.update({
+      where: { id: batchId },
+      data: { nextRunAt: new Date(0) },
+    });
+    failRecipientOnce = "ou_outbox_success";
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    await prisma.$transaction([
+      prisma.notificationDeliveryBatch.update({
+        where: { id: batchId },
+        data: { attempts: MAX_NOTIFICATION_ATTEMPTS },
+      }),
+      prisma.notificationOutboxRecipient.updateMany({
+        where: { deliveryBatchId: batchId, status: "FAILED" },
+        data: { attempts: MAX_NOTIFICATION_ATTEMPTS },
+      }),
+      prisma.notificationOutbox.updateMany({
+        where: { eventKey: { in: [canceledKey, retryKey] } },
+        data: { attempts: MAX_NOTIFICATION_ATTEMPTS },
+      }),
+    ]);
+    expect(
+      await prisma.$transaction((tx) =>
+        cancelRetryableNotificationOutboxesTx(
+          tx,
+          [canceledKey],
+          "测试业务事件已失效",
+        ),
+      ),
+    ).toBe(1);
+    expect(
+      await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+        where: { id: batchId },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "FAILED" });
+
+    expect(
+      await resetNotificationOutboxForRetry({
+        id: retryOutbox.id,
+        channel: retryOutbox.channel,
+        type: retryOutbox.type,
+      }),
+    ).toEqual({ count: 1 });
+    const members = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: [canceledKey, retryKey] } },
+      include: { recipients: true },
+      orderBy: { eventKey: "asc" },
+    });
+    const canceled = members.find((item) => item.eventKey === canceledKey)!;
+    const retryable = members.find((item) => item.eventKey === retryKey)!;
+    expect(canceled.status).toBe("CANCELED");
+    expect(canceled.recipients[0]?.status).toBe("CANCELED");
+    expect(retryable.status).toBe("PENDING");
+    expect(retryable.recipients[0]?.status).toBe("PENDING");
+    sendAttempts = [];
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual(["ou_outbox_success"]);
+    expect(
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: canceledKey },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "CANCELED" });
+  });
+
+  test("取消最后成员与迟到入队竞争时迟到事件进入新批次", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const canceledKey = `${EVENT_PREFIX}aggregation-cancel-seal`;
+    await enqueueProjectManagementNotification({
+      eventKey: canceledKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-cancel-seal",
+        taskId: "aggregation-cancel-seal",
+        taskTitle: "取消封口任务",
+      }),
+    });
+    const batch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: { recipients: { some: { outbox: { eventKey: canceledKey } } } },
+    });
+    if (!batch.openKey) throw new Error("取消封口测试缺少 openKey");
+    const baselineWaiters = await waitingAdvisoryLockCount();
+    let signalLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      signalLockHeld = resolve;
+    });
+    let releaseLock!: () => void;
+    const waitForLockRelease = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const holdingLock = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT 1 AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(hashtextextended(${batch.openKey}, 0))
+          ) AS "notificationAggregationLock"
+        `;
+        signalLockHeld();
+        await waitForLockRelease;
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+
+    const canceling = prisma.$transaction((tx) =>
+      cancelRetryableNotificationOutboxesTx(
+        tx,
+        [canceledKey],
+        "测试取消最后一个批次成员",
+      ),
+    );
+    await expect.poll(waitingAdvisoryLockCount).toBeGreaterThan(baselineWaiters);
+    const lateKey = `${EVENT_PREFIX}aggregation-cancel-seal-late`;
+    const lateEnqueue = enqueueProjectManagementNotification({
+      eventKey: lateKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-cancel-seal-late",
+        taskId: "aggregation-cancel-seal-late",
+        taskTitle: "取消后的迟到任务",
+      }),
+    });
+    try {
+      await expect
+        .poll(waitingAdvisoryLockCount)
+        .toBeGreaterThanOrEqual(baselineWaiters + 2);
+    } finally {
+      releaseLock();
+      await holdingLock;
+    }
+    expect(await canceling).toBe(1);
+    await lateEnqueue;
+
+    const oldBatch = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+    });
+    const late = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: lateKey },
+      include: { recipients: true },
+    });
+    expect(oldBatch.status).toBe("CANCELED");
+    expect(oldBatch.openKey).toBeNull();
+    expect(late.recipients[0]?.deliveryBatchId).not.toBe(batch.id);
+    expect(late.status).toBe("PENDING");
+  });
+
+  test("窗口封口与迟到入队竞争时迟到事件进入新批次", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const initialKeys = [
+      `${EVENT_PREFIX}aggregation-seal-a`,
+      `${EVENT_PREFIX}aggregation-seal-b`,
+    ];
+    for (const [index, eventKey] of initialKeys.entries()) {
+      await enqueueProjectManagementNotification({
+        eventKey,
+        type: "task_updated",
+        payload: projectManagementPayload({
+          kind: "task_updated",
+          category: "TASK",
+          entityType: "Task",
+          entityId: `aggregation-seal-${index}`,
+          taskId: `aggregation-seal-${index}`,
+          taskTitle: `封口任务 ${index + 1}`,
+        }),
+      });
+    }
+    const initialBatch = await prisma.notificationDeliveryBatch.findFirstOrThrow({
+      where: { recipients: { some: { outbox: { eventKey: initialKeys[0] } } } },
+    });
+    if (!initialBatch.openKey) throw new Error("封口测试缺少 openKey");
+    await prisma.notificationDeliveryBatch.update({
+      where: { id: initialBatch.id },
+      data: { nextRunAt: new Date(0) },
+    });
+
+    const baselineWaiters = await waitingAdvisoryLockCount();
+    let signalLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      signalLockHeld = resolve;
+    });
+    let releaseLock!: () => void;
+    const waitForLockRelease = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const holdingLock = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT 1 AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(hashtextextended(${initialBatch.openKey}, 0))
+          ) AS "notificationAggregationLock"
+        `;
+        signalLockHeld();
+        await waitForLockRelease;
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+
+    const draining = drainNotificationOutbox(20, {
+      ignoreDeliveryDisabled: true,
+    });
+    await expect.poll(waitingAdvisoryLockCount).toBeGreaterThan(baselineWaiters);
+    const lateKey = `${EVENT_PREFIX}aggregation-seal-late`;
+    const lateEnqueue = enqueueProjectManagementNotification({
+      eventKey: lateKey,
+      type: "task_updated",
+      payload: projectManagementPayload({
+        kind: "task_updated",
+        category: "TASK",
+        entityType: "Task",
+        entityId: "aggregation-seal-late",
+        taskId: "aggregation-seal-late",
+        taskTitle: "迟到任务",
+      }),
+    });
+    try {
+      await expect
+        .poll(waitingAdvisoryLockCount)
+        .toBeGreaterThanOrEqual(baselineWaiters + 2);
+    } finally {
+      releaseLock();
+      await holdingLock;
+    }
+    expect(await draining).toBe(1);
+    await lateEnqueue;
+
+    const late = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: lateKey },
+      include: { recipients: true },
+    });
+    expect(late.status).toBe("PENDING");
+    expect(late.recipients[0]?.deliveryBatchId).not.toBe(initialBatch.id);
+    const sealed = await prisma.notificationDeliveryBatch.findUniqueOrThrow({
+      where: { id: initialBatch.id },
+      include: { recipients: true },
+    });
+    expect(sealed.status).toBe("SENT");
+    expect(sealed.recipients).toHaveLength(2);
+
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { id: late.recipients[0]?.deliveryBatchId ?? "" },
+      data: { nextRunAt: new Date(0) },
+    });
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { in: [...initialKeys, lateKey] },
+          status: { not: "SENT" },
+        },
+      }),
+    ).toBe(0);
+  });
+
   test("Revision 取消使用通知机器人并直达 Task 详情", async () => {
     const eventKey = `${EVENT_PREFIX}revision-cancelled`;
     await enqueueNotification({
@@ -1746,6 +3022,24 @@ function projectManagementPayload(
     context: {},
     ...input,
   };
+}
+
+async function waitingAdvisoryLockCount() {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*)::bigint AS "count"
+    FROM pg_locks
+    WHERE locktype = 'advisory' AND NOT granted
+  `;
+  return Number(rows[0]?.count ?? BigInt(0));
+}
+
+async function waitingDatabaseLockCount() {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*)::bigint AS "count"
+    FROM pg_locks
+    WHERE NOT granted
+  `;
+  return Number(rows[0]?.count ?? BigInt(0));
 }
 
 function projectManagementButton(

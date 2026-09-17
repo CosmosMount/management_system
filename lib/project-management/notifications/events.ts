@@ -4,10 +4,13 @@ import type {
 } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { prisma } from "@/lib/prisma";
+import { enqueueNotificationTx } from "@/lib/notification-outbox";
+import { attachAggregatedNotificationRecipientsTx } from "@/lib/notification-outbox/aggregation-enqueue";
 import {
-  enqueueNotification,
-  enqueueNotificationTx,
-} from "@/lib/notification-outbox";
+  isProjectManagementNotificationAggregationEligible,
+  projectManagementNotificationAggregationWindowSeconds,
+} from "@/lib/project-management/notifications/aggregation";
 import {
   botKindForPayload,
   PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
@@ -91,13 +94,66 @@ export async function enqueueProjectManagementNotificationTx(
     payload,
     botKind,
   });
-  return enqueueNotificationTx(tx, {
+  return enqueuePreparedProjectManagementNotificationTx(tx, {
     eventKey,
-    channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
-    botKind: botKind ?? botKindForPayload(normalizedPayload),
     type,
     payload: normalizedPayload,
+    botKind: botKind ?? botKindForPayload(normalizedPayload),
   });
+}
+
+async function enqueuePreparedProjectManagementNotificationTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    eventKey: string;
+    type: ProjectManagementNotificationPayload["kind"];
+    payload: ProjectManagementNotificationPayload;
+    botKind: FeishuBotKind;
+  },
+) {
+  const recipientOpenIds = [
+    ...new Set(
+      input.payload.recipientOpenIds
+        .map((openId) => openId.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const aggregationEligible =
+    recipientOpenIds.length > 0 &&
+    isProjectManagementNotificationAggregationEligible(input.payload);
+  const windowSeconds = aggregationEligible
+    ? projectManagementNotificationAggregationWindowSeconds()
+    : 0;
+  const aggregate = aggregationEligible && windowSeconds > 0;
+  const createdAt = new Date();
+  const nextRunAt = aggregate
+    ? new Date(createdAt.getTime() + windowSeconds * 1000)
+    : createdAt;
+  const result = await enqueueNotificationTx(tx, {
+    eventKey: input.eventKey,
+    channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
+    botKind: input.botKind,
+    type: input.type,
+    payload: input.payload,
+    deliveryMode: aggregate ? "AGGREGATED" : "DIRECT",
+    nextRunAt,
+  });
+  if (!result.created || !aggregate) return result;
+
+  const outbox = await tx.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey: input.eventKey },
+    select: { id: true },
+  });
+  await attachAggregatedNotificationRecipientsTx(tx, {
+    outboxId: outbox.id,
+    channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
+    botKind: input.botKind,
+    category: input.payload.category,
+    recipientOpenIds,
+    windowSeconds,
+    createdAt,
+  });
+  return result;
 }
 
 export async function enqueueProjectManagementNotification({
@@ -116,13 +172,14 @@ export async function enqueueProjectManagementNotification({
     payload,
     botKind,
   });
-  return enqueueNotification({
-    eventKey,
-    channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
-    botKind: botKind ?? botKindForPayload(normalizedPayload),
-    type,
-    payload: normalizedPayload,
-  });
+  return prisma.$transaction((tx) =>
+    enqueuePreparedProjectManagementNotificationTx(tx, {
+      eventKey,
+      type,
+      payload: normalizedPayload,
+      botKind: botKind ?? botKindForPayload(normalizedPayload),
+    }),
+  );
 }
 
 export function notificationChannelEnabledByDefault(

@@ -337,6 +337,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                         itemKind={item.itemKind}
                         purchaseLink={item.purchaseLink}
                         referenceImagePath={item.referenceImagePath}
+                        referenceImagePaths={item.referenceImagePaths}
                       />
                     </TableCell>
                     <TableCell>{item.quantity}</TableCell>

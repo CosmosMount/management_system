@@ -50,6 +50,7 @@ export type OrderRow = {
     itemKind: import("@prisma/client").PurchaseItemKind;
     purchaseLink: string;
     referenceImagePath: string | null;
+    referenceImagePaths: string;
     quantity: number;
     unitPrice: number;
   }[];
@@ -211,6 +212,7 @@ export function OrdersTable({
                                   itemKind={item.itemKind}
                                   purchaseLink={item.purchaseLink}
                                   referenceImagePath={item.referenceImagePath}
+                                  referenceImagePaths={item.referenceImagePaths}
                                 />
                               </TableCell>
                               <TableCell>{item.quantity}</TableCell>

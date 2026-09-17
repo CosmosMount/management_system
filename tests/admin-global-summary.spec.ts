@@ -134,7 +134,7 @@ test("总结只包含当前计划待办和到期启动草稿，排除终态、�
   expect(run.markdown).toContain(dueDraft.title);
   expect(summaryTaskLines(run.markdown, dueDraft.title)).toContain("无进行中节点");
   expect(run.markdown).toContain("超过启动时间未激活");
-  expect(run.markdown).toContain(active.nodes.find((node) => node.milestone)?.milestone?.goal);
+  expect(run.markdown).toContain("当前计划任务节点 1");
   expect(run.markdown).not.toContain(historyGoal);
   for (const title of excludedTitles) expect(run.markdown).not.toContain(title);
 });

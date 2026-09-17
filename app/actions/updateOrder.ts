@@ -29,6 +29,10 @@ import {
 import { parseJsonFormField } from "@/lib/validations/form-data-json";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import {
+  resolveItemReferenceImagePaths,
+  serializeItemReferenceImagePaths,
+} from "@/lib/purchase-item-images";
+import {
   lockActiveProcurementUserTx,
   requireActiveProcurementUser,
 } from "@/lib/active-account";
@@ -89,23 +93,31 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
   const currentOrder = await requireDraftOrder(parsed.orderId, userOpenId);
   await assertExistingItemImagesBelongToOrder(
     parsed.orderId,
-    currentOrder.items.map((item) => item.referenceImagePath),
-    parsed.items.map((item) => item.referenceImagePath),
+    currentOrder.items.flatMap((item) =>
+      resolveItemReferenceImagePaths(
+        item.referenceImagePaths,
+        item.referenceImagePath,
+      ),
+    ),
+    parsed.items.flatMap((item) => item.referenceImagePaths),
   );
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
+  const context = parsed.submit ? await getNotificationContext() : undefined;
   const prepared = await prepareItemReferenceImages({
     orderId: parsed.orderId,
     itemKinds: storedItems.map((item) => item.itemKind),
     itemImages,
-    existingPaths: parsed.items.map((item) => item.referenceImagePath),
+    existingPaths: parsed.items.map((item) => item.referenceImagePaths),
   });
   const preparedItems = storedItems.map((item, index) => ({
     ...item,
-    referenceImagePath: prepared.referenceImagePaths[index],
+    referenceImagePath: prepared.referenceImagePaths[index]?.[0] ?? null,
+    referenceImagePaths: serializeItemReferenceImagePaths(
+      prepared.referenceImagePaths[index] ?? [],
+    ),
   }));
-  const context = parsed.submit ? await getNotificationContext() : undefined;
   let refreshed;
   try {
     refreshed = await prisma.$transaction(async (tx) => {
@@ -151,13 +163,16 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
   }
 
   const retainedPaths = new Set(
-    prepared.referenceImagePaths.filter((value): value is string => !!value),
+    prepared.referenceImagePaths.flat(),
   );
   const replacedPaths = currentOrder.items
-    .map((item) => item.referenceImagePath)
-    .filter(
-      (value): value is string => !!value && !retainedPaths.has(value),
-    );
+    .flatMap((item) =>
+      resolveItemReferenceImagePaths(
+        item.referenceImagePaths,
+        item.referenceImagePath,
+      ),
+    )
+    .filter((value) => !retainedPaths.has(value));
   await cleanupUploadPaths(replacedPaths, "order_update_replaced_images");
 
   if (parsed.submit) {

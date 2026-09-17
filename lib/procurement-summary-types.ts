@@ -12,6 +12,7 @@ export type SummaryRow = {
   itemKind: PurchaseItemKind;
   purchaseLink: string;
   referenceImagePath: string | null;
+  referenceImagePaths: string;
   processingVendor: string;
   quantity: number;
   unitPrice: number;

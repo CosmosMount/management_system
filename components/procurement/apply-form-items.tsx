@@ -6,7 +6,7 @@ import {
   type FieldArrayWithId,
   type UseFormReturn,
 } from "react-hook-form";
-import { FileSpreadsheet, Plus, Trash2 } from "lucide-react";
+import { FileSpreadsheet, Plus, Trash2, X } from "lucide-react";
 import { FilePreviewImage } from "@/components/file-preview-image";
 import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
 import {
@@ -41,7 +41,12 @@ import {
   purchaseItemKindLabels,
   type PurchaseItemKind,
 } from "@/lib/purchase-item-kind";
-import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
+import {
+  IMAGE_UPLOAD_ACCEPT,
+  ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL,
+  MAX_ITEM_REFERENCE_IMAGE_COUNT,
+  MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE,
+} from "@/lib/upload-accept";
 
 export function ApplyFormItems({
   form,
@@ -104,9 +109,9 @@ export function ApplyFormItems({
         {fields.map((field, index) => {
           const itemPrefix = `purchase-item-${index}`;
           const itemKind = items[index]?.itemKind ?? "COMPONENT";
-          const existingImage = items[index]?.referenceImagePath;
-          const previewFile = itemImageFiles[index];
-          const hasPreview = Boolean(previewFile || existingImage);
+          const existingImages = items[index]?.referenceImagePaths ?? [];
+          const previewFiles = itemImageFiles[index] ?? [];
+          const hasPreview = existingImages.length + previewFiles.length > 0;
           const itemErrors = form.formState.errors.items?.[index];
 
           return (
@@ -233,38 +238,136 @@ export function ApplyFormItems({
 
               {itemKindNeedsImage(itemKind) ? (
                 <div className="space-y-2 sm:col-span-6">
-                  <Label htmlFor={`${itemPrefix}-image`}>参考图片</Label>
+                  <Label htmlFor={`${itemPrefix}-image`}>
+                    参考图片（最多 {MAX_ITEM_REFERENCE_IMAGE_COUNT} 张）
+                  </Label>
                   <Input
                     id={`${itemPrefix}-image`}
                     type="file"
                     accept={IMAGE_UPLOAD_ACCEPT}
+                    multiple
                     aria-invalid={Boolean(itemImageErrors[index])}
-                    aria-describedby={itemImageErrors[index] ? `${itemPrefix}-image-error` : undefined}
+                    aria-describedby={`${itemPrefix}-image-help${
+                      itemImageErrors[index] ? ` ${itemPrefix}-image-error` : ""
+                    }`}
                     onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      setItemImageFiles((previous) => ({ ...previous, [index]: file }));
-                      if (file) {
-                        setItemImageErrors((current) => {
-                          const next = { ...current };
-                          delete next[index];
-                          return next;
-                        });
+                      const selectedFiles = Array.from(event.target.files ?? []);
+                      event.target.value = "";
+                      if (selectedFiles.length === 0) return;
+                      const nextFiles = [...previewFiles, ...selectedFiles];
+                      if (
+                        existingImages.length + nextFiles.length >
+                        MAX_ITEM_REFERENCE_IMAGE_COUNT
+                      ) {
+                        setItemImageErrors((current) => ({
+                          ...current,
+                          [index]: `参考图片最多 ${MAX_ITEM_REFERENCE_IMAGE_COUNT} 张`,
+                        }));
+                        return;
                       }
+                      const uploadSize = nextFiles.reduce(
+                        (sum, file) => sum + file.size,
+                        0,
+                      );
+                      if (uploadSize > MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE) {
+                        setItemImageErrors((current) => ({
+                          ...current,
+                          [index]: `本次新增图片总大小不能超过 ${ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL}`,
+                        }));
+                        return;
+                      }
+                      setItemImageFiles((previous) => ({
+                        ...previous,
+                        [index]: nextFiles,
+                      }));
+                      setItemImageErrors((current) => {
+                        const next = { ...current };
+                        delete next[index];
+                        return next;
+                      });
                     }}
                   />
+                  <p
+                    id={`${itemPrefix}-image-help`}
+                    className="text-sm text-muted-foreground"
+                  >
+                    可一次选择多张，也可分批添加；本次新增图片合计不超过 {ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL}。
+                  </p>
                   {itemImageErrors[index] && (
                     <p id={`${itemPrefix}-image-error`} className="text-sm text-destructive" role="alert">
                       {itemImageErrors[index]}
                     </p>
                   )}
                   {hasPreview && (
-                    <div className="mt-2">
-                      <FilePreviewImage
-                        file={previewFile}
-                        fallbackSrc={existingImage}
-                        alt="参考图片预览"
-                        className="max-h-32 rounded-md border object-contain"
-                      />
+                    <div
+                      className="mt-2 grid gap-3 sm:grid-cols-3"
+                      aria-label={`已选择 ${existingImages.length + previewFiles.length} 张参考图片`}
+                    >
+                      {existingImages.map((imagePath, imageIndex) => (
+                        <div key={imagePath} className="space-y-1 rounded-md border p-2">
+                          <FilePreviewImage
+                            fallbackSrc={imagePath}
+                            alt={`参考图片 ${imageIndex + 1}`}
+                            className="h-28 w-full rounded object-contain"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="w-full"
+                            aria-label={`移除参考图片 ${imageIndex + 1}`}
+                            onClick={() => {
+                              const retained = existingImages.filter(
+                                (_, currentIndex) => currentIndex !== imageIndex,
+                              );
+                              form.setValue(
+                                `items.${index}.referenceImagePaths`,
+                                retained,
+                                { shouldDirty: true },
+                              );
+                            }}
+                          >
+                            <X className="mr-1 h-4 w-4" />
+                            移除
+                          </Button>
+                        </div>
+                      ))}
+                      {previewFiles.map((file, fileIndex) => {
+                        const imageNumber = existingImages.length + fileIndex + 1;
+                        return (
+                          <div
+                            key={`${file.name}-${file.lastModified}-${fileIndex}`}
+                            className="space-y-1 rounded-md border p-2"
+                          >
+                            <FilePreviewImage
+                              file={file}
+                              alt={`参考图片 ${imageNumber}`}
+                              className="h-28 w-full rounded object-contain"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="w-full"
+                              aria-label={`移除参考图片 ${imageNumber}`}
+                              onClick={() => {
+                                setItemImageFiles((previous) => {
+                                  const nextFiles = (previous[index] ?? []).filter(
+                                    (_, currentIndex) => currentIndex !== fileIndex,
+                                  );
+                                  const next = { ...previous };
+                                  if (nextFiles.length > 0) next[index] = nextFiles;
+                                  else delete next[index];
+                                  return next;
+                                });
+                              }}
+                            >
+                              <X className="mr-1 h-4 w-4" />
+                              移除
+                            </Button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

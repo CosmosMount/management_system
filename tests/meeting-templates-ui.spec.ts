@@ -154,6 +154,7 @@ test("模板不可用、加载失败、并发冲突保留草稿且普通用户�
 test("模板预填保留不可用引用并显示可修正的字段错误", async ({ page, context, baseURL }) => {
   if (!baseURL) throw new Error("缺少隔离服务地址");
   const { admin, viewer } = await fixture();
+  await prisma.person.createMany({ data: Array.from({ length: 51 }, (_, index) => ({ displayName: `模板候选人员 ${index} ${randomUUID()}` })) });
   const project = await prisma.project.create({ data: { name: `不可用模板项目 ${randomUUID()}`, description: "", requesterAccountId: admin.account.id } });
   const template = await createMeetingTemplate(actor(admin), { requestId: randomUUID(), name: `不可用引用 ${randomUUID()}`, topic: "保留非时间内容", personIds: [viewer.person.id], minutes: "修正对象之前不要清空", timelineDisplay: { projectIds: [project.id], taskIds: [] } });
   await prisma.person.update({ where: { id: viewer.person.id }, data: { status: "INACTIVE" } });
@@ -167,8 +168,12 @@ test("模板预填保留不可用引用并显示可修正的字段错误", async
   await expect(page.getByLabel("会议纪要", { exact: true })).toHaveValue(template.minutes);
   await expect(page.getByText(project.name, { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "创建会议记录", exact: true }).click();
+  const peoplePicker = page.getByRole("combobox", { name: "会议参与人", exact: true });
+  await expect(peoplePicker).toBeFocused();
+  await expect(peoplePicker).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(peoplePicker).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("alert").filter({ hasText: "参与人不存在或已停用" }).first()).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "会议参与人", exact: true })).toBeFocused();
   expect(await prisma.meetingRecord.count({ where: { topic: template.topic } })).toBe(0);
   await expectHealthyPage(page);
 });

@@ -87,8 +87,8 @@ export function ApplyForm({
     const missingImageIndex = data.items.findIndex(
       (item, index) =>
         itemKindNeedsImage(item.itemKind) &&
-        !itemImageFiles[index] &&
-        !item.referenceImagePath,
+        (itemImageFiles[index]?.length ?? 0) === 0 &&
+        item.referenceImagePaths.length === 0,
     );
     if (missingImageIndex >= 0) {
       setItemImageErrors({
@@ -129,7 +129,7 @@ export function ApplyForm({
   function handleItemKindChange(index: number, kind: PurchaseItemKind) {
     form.setValue(`items.${index}.itemKind`, kind);
     if (itemKindNeedsLink(kind)) {
-      form.setValue(`items.${index}.referenceImagePath`, null);
+      form.setValue(`items.${index}.referenceImagePaths`, []);
       form.setValue(`items.${index}.processingVendor`, "");
       setItemImageFiles((prev) => {
         const next = { ...prev };
@@ -146,7 +146,7 @@ export function ApplyForm({
     } else {
       form.setValue(`items.${index}.purchaseLink`, "");
       form.setValue(`items.${index}.processingVendor`, "");
-      form.setValue(`items.${index}.referenceImagePath`, null);
+      form.setValue(`items.${index}.referenceImagePaths`, []);
       setItemImageFiles((prev) => {
         const next = { ...prev };
         delete next[index];

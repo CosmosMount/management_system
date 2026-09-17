@@ -4,6 +4,15 @@ import {
   PURCHASE_ITEM_KINDS,
 } from "@/lib/purchase-item-kind";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS, MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
+import {
+  resolveItemReferenceImagePaths,
+  serializeItemReferenceImagePaths,
+} from "@/lib/purchase-item-images";
+import {
+  ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL,
+  MAX_ITEM_REFERENCE_IMAGE_COUNT,
+  MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE,
+} from "@/lib/upload-accept";
 import { z } from "zod";
 
 export const purchaseItemSchema = z
@@ -12,7 +21,13 @@ export const purchaseItemSchema = z
     spec: z.string().min(1, "请输入规格"),
     itemKind: z.enum(PURCHASE_ITEM_KINDS, { message: "请选择物品种类" }),
     purchaseLink: z.string().optional().default(""),
-    referenceImagePath: z.string().nullable().optional(),
+    referenceImagePaths: z
+      .array(z.string().min(1, "图片路径无效"))
+      .max(
+        MAX_ITEM_REFERENCE_IMAGE_COUNT,
+        `参考图片最多 ${MAX_ITEM_REFERENCE_IMAGE_COUNT} 张`,
+      )
+      .default([]),
     processingVendor: z.string().optional().default(""),
     quantity: z.number().int().min(1, "数量至少为 1"),
     lineTotal: z.number().min(0, "总价不能为负"),
@@ -44,6 +59,13 @@ export const purchaseItemSchema = z
         });
       }
     }
+    if (new Set(item.referenceImagePaths).size !== item.referenceImagePaths.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "参考图片路径重复，请刷新后重试",
+        path: ["referenceImagePaths"],
+      });
+    }
   });
 
 export function toStoredPurchaseItem(item: PurchaseItemInput) {
@@ -55,8 +77,11 @@ export function toStoredPurchaseItem(item: PurchaseItemInput) {
       ? (item.purchaseLink?.trim() ?? "")
       : "",
     referenceImagePath: itemKindNeedsImage(item.itemKind)
-      ? (item.referenceImagePath ?? null)
+      ? (item.referenceImagePaths[0] ?? null)
       : null,
+    referenceImagePaths: serializeItemReferenceImagePaths(
+      itemKindNeedsImage(item.itemKind) ? item.referenceImagePaths : [],
+    ),
     processingVendor:
       item.itemKind === "PROCESSING_FEE"
         ? (item.processingVendor?.trim() ?? "")
@@ -97,6 +122,7 @@ export function toOrderFormInput(order: {
     itemKind: PurchaseItemInput["itemKind"];
     purchaseLink: string;
     referenceImagePath: string | null;
+    referenceImagePaths: string;
     processingVendor: string;
     quantity: number;
     unitPrice: number;
@@ -110,7 +136,10 @@ export function toOrderFormInput(order: {
       spec: item.spec,
       itemKind: item.itemKind,
       purchaseLink: item.purchaseLink,
-      referenceImagePath: item.referenceImagePath,
+      referenceImagePaths: resolveItemReferenceImagePaths(
+        item.referenceImagePaths,
+        item.referenceImagePath,
+      ),
       processingVendor: item.processingVendor,
       quantity: item.quantity,
       lineTotal: item.quantity * item.unitPrice,
@@ -119,13 +148,14 @@ export function toOrderFormInput(order: {
 }
 
 export function parseOrderFormData(formData: FormData): {
-  itemImages: Map<number, File>;
+  itemImages: Map<number, File[]>;
 } {
-  const itemImages = new Map<number, File>();
+  const itemImages = new Map<number, File[]>();
   for (const [key, value] of formData.entries()) {
-    const match = key.match(/^itemImage-(\d+)$/);
+    const match = key.match(/^itemImage-(\d+)(?:-\d+)?$/);
     if (match && value instanceof File && value.size > 0) {
-      itemImages.set(Number(match[1]), value);
+      const itemIndex = Number(match[1]);
+      itemImages.set(itemIndex, [...(itemImages.get(itemIndex) ?? []), value]);
     }
   }
   return { itemImages };
@@ -133,14 +163,27 @@ export function parseOrderFormData(formData: FormData): {
 
 export function assertItemImagesPresent(
   items: PurchaseItemInput[],
-  itemImages: Map<number, File>,
+  itemImages: Map<number, File[]>,
 ): void {
   items.forEach((item, index) => {
     if (!itemKindNeedsImage(item.itemKind)) return;
-    const hasFile = itemImages.has(index);
-    const hasExisting = !!item.referenceImagePath;
+    const files = itemImages.get(index) ?? [];
+    const imageCount = item.referenceImagePaths.length + files.length;
+    const hasFile = files.length > 0;
+    const hasExisting = item.referenceImagePaths.length > 0;
     if (!hasFile && !hasExisting) {
       throw new Error(`请为「${item.name || `第 ${index + 1} 条明细`}」上传图片`);
+    }
+    if (imageCount > MAX_ITEM_REFERENCE_IMAGE_COUNT) {
+      throw new Error(
+        `「${item.name || `第 ${index + 1} 条明细`}」的参考图片最多 ${MAX_ITEM_REFERENCE_IMAGE_COUNT} 张`,
+      );
+    }
+    const uploadSize = files.reduce((sum, file) => sum + file.size, 0);
+    if (uploadSize > MAX_ITEM_REFERENCE_IMAGE_TOTAL_SIZE) {
+      throw new Error(
+        `「${item.name || `第 ${index + 1} 条明细`}」本次新增图片总大小不能超过 ${ITEM_REFERENCE_IMAGE_TOTAL_SIZE_LABEL}`,
+      );
     }
   });
 }
