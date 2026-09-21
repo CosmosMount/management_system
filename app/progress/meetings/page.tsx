@@ -42,14 +42,14 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
       {result.error && <p role="alert" className="text-destructive">{result.error} <Link href={routes.progress.meetings} className="underline">重新加载列表</Link></p>}
       {result.data?.items.length === 0 && <p role="status">{Object.keys(filters).length ? "没有符合条件的会议" : "暂无会议记录"}</p>}
       {!!result.data?.items.length && <section aria-label="会议列表" className="min-w-0 overflow-hidden rounded-xl border bg-card">
-        <div className="grid gap-3 border-b bg-muted/25 px-4 py-4 text-sm font-medium text-muted-foreground md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(12rem,1.5fr)_8rem]">
+        <div aria-hidden="true" className="hidden gap-3 border-b bg-muted/25 px-4 py-4 text-sm font-medium text-muted-foreground md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(12rem,1.5fr)_8rem]">
           <span>会议主题</span><span>参与人</span><span>工作区间</span><span>更新时间</span>
         </div>
         {result.data?.items.map((meeting) => <article key={meeting.id} className="grid min-w-0 gap-3 border-b px-4 py-4 text-sm last:border-b-0 hover:bg-muted/10 md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(12rem,1.5fr)_8rem] md:items-center">
           <Link href={routes.progress.meetingDetail(meeting.id)} className="min-w-0 break-words text-lg font-semibold text-primary underline-offset-4 hover:underline [overflow-wrap:anywhere]">{meeting.topic}</Link>
-          <p className="min-w-0 break-words [overflow-wrap:anywhere]">{meeting.participants.map((person) => person.displayName).join("、") || "暂无参与人"}</p>
-          <p className="text-muted-foreground">{formatDateTime(meeting.rangeStart)} 至 {formatDateTime(meeting.rangeEnd)}</p>
-          <p className="text-muted-foreground">{formatDateTime(meeting.updatedAt)}</p>
+          <p className="min-w-0 break-words [overflow-wrap:anywhere]"><span className="mb-1 block text-xs text-muted-foreground md:hidden">参与人</span>{meeting.participants.map((person) => person.displayName).join("、") || "暂无参与人"}</p>
+          <p className="text-muted-foreground"><span className="mb-1 block text-xs md:hidden">工作区间</span>{formatDateTime(meeting.rangeStart)} 至 {formatDateTime(meeting.rangeEnd)}</p>
+          <p className="text-muted-foreground"><span className="mb-1 block text-xs md:hidden">更新时间</span>{formatDateTime(meeting.updatedAt)}</p>
         </article>)}
       </section>}
       {result.data?.nextCursor && <Link className={buttonVariants({ variant: "outline" })} href={`${routes.progress.meetings}?${new URLSearchParams({ ...filters, cursor: result.data.nextCursor })}`}>下一页会议</Link>}

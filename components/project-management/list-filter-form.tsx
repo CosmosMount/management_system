@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useTransition, type FormEvent } from "react";
+import { useId, useState, useTransition, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 type FilterField = {
   name: "mine" | "status" | "priority";
@@ -31,6 +32,8 @@ export function ListFilterForm({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const [expanded, setExpanded] = useState(true);
+  const filterFieldsId = useId();
   const committedValues: Record<string, string> = {
     q: query,
     ...Object.fromEntries(filters.map((filter) => [filter.name, filter.value])),
@@ -55,7 +58,12 @@ export function ListFilterForm({
   }
 
   return (
-    <form action={action} method="get" aria-label={label} aria-busy={isPending} className={className} onSubmit={submit}>
+    <div className="min-w-0 space-y-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-2 lg:hidden">
+      <Button type="button" variant="outline" aria-expanded={expanded} aria-controls={filterFieldsId} onClick={() => setExpanded((current) => !current)}>{expanded ? "收起筛选条件" : "展开筛选条件"}</Button>
+      <span className="min-w-0 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">{[query && `关键词：${query}`, ...filters.map((filter) => filter.options.find((option) => option.value === filter.value)?.label)].filter(Boolean).join(" · ")}</span>
+    </div>
+    <form id={filterFieldsId} action={action} method="get" aria-label={label} aria-busy={isPending} className={cn(className, !expanded && "hidden lg:grid")} onSubmit={submit}>
       <Input name="q" value={values.q} onChange={(event) => updateField("q", event.target.value)} placeholder={searchLabel} aria-label={searchLabel} />
       {filters.map((filter) => (
         <select key={filter.name} name={filter.name} value={values[filter.name]} onChange={(event) => updateField(filter.name, event.target.value)} aria-label={filter.label} className="h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm">
@@ -67,5 +75,6 @@ export function ListFilterForm({
         if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) setDraft(null);
       }}>重置</Link>
     </form>
+    </div>
   );
 }

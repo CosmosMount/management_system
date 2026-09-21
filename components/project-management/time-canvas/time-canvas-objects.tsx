@@ -117,7 +117,7 @@ export function SegmentBlock({
       type="button"
       className={cn(
         "absolute z-10 flex h-5 min-w-px items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-        "touch-none",
+        "touch-auto",
         segment.type === "WORK" &&
           "border border-sky-600 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
         segment.type === "BUSY" &&
@@ -166,7 +166,8 @@ export function SegmentBlock({
         }
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !interaction?.onSegmentTransform) return;
+        // Touch gestures browse the timeline; date fields provide deliberate edits.
+        if (event.pointerType === "touch" || event.button !== 0 || !interaction?.onSegmentTransform) return;
         const target = event.target;
         const handle =
           target instanceof HTMLElement
@@ -422,7 +423,7 @@ export function AnchorMarker({
       type="button"
       className={cn(
         "absolute z-20 flex max-w-40 -translate-x-1/2 flex-col items-center rounded px-1 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        canMove && "touch-none cursor-grab",
+        canMove && "touch-auto cursor-grab",
         move && "cursor-grabbing opacity-80",
         selectedForGroup && "bg-primary/10 ring-2 ring-primary",
         multiSelected && !selected && "ring-primary/70",
@@ -457,7 +458,7 @@ export function AnchorMarker({
         requestKeyboardMove(event.key === "ArrowLeft" ? -1 : 1);
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !canMove) return;
+        if (event.pointerType === "touch" || event.button !== 0 || !canMove) return;
         if (!event.shiftKey && !multiSelected) {
           interaction?.onAnchorSelect?.(anchor.id, { toggle: false });
         }

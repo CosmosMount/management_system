@@ -27,6 +27,7 @@ import type {
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import {
   formatCanvasDateTime as formatDateTime,
   formatCanvasRange as formatRange,
@@ -475,6 +476,9 @@ export function TimeCanvas({
   );
 
   const selectedEntity = resolveSelection(model, selection);
+  const [objectListOpen, setObjectListOpen] = useState(false);
+  const [visibleObjectCount, setVisibleObjectCount] = useState(20);
+  const visibleSegments = model.segments.filter((segment) => (display.showBusy || segment.type !== "BUSY") && segment.startMs < viewportWindow.endMs && segment.endMs > viewportWindow.startMs);
   return (
     <section
       className="min-w-0 max-w-full"
@@ -516,7 +520,7 @@ export function TimeCanvas({
           <div
             ref={scrollElementRef}
             className={cn(
-              "relative max-h-[min(68dvh,44rem)] min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain",
+              "relative max-h-[min(68dvh,44rem)] min-w-0 touch-auto overflow-x-auto overflow-y-auto overscroll-contain",
               markerOnlyCanvas ? "min-h-0" : "min-h-72",
             )}
             data-testid="time-canvas-scroll"
@@ -677,6 +681,36 @@ export function TimeCanvas({
           <TimeCanvasInspector entity={selectedEntity} nowMs={liveNowMs} onClose={() => select(null)} />
         )}
       </div>
+
+      {selectedEntity?.kind === "SEGMENT" && interaction?.onSegmentOpen && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-3 py-2" data-testid="time-canvas-selected-segment">
+          <p className="min-w-0 flex-1 basis-40 break-words text-sm [overflow-wrap:anywhere]">{selectionAnnouncement(selectedEntity)}</p>
+          {selectedEntity.value.permissions.canViewDetails && selectedEntity.value.type === "WORK" && (
+            <Button type="button" size="sm" variant="outline" onClick={() => interaction.onSegmentOpen?.(selectedEntity.value.id)}>
+              {selectedEntity.value.permissions.canEdit ? "编辑投入" : "查看投入详情"}
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="ghost" onClick={() => select(null)}>取消选择</Button>
+        </div>
+      )}
+
+      {presentation !== "COMPACT" && model.segments.length > 0 && (
+        <details className="min-w-0 border-t border-border p-3" onToggle={(event) => setObjectListOpen(event.currentTarget.open)} data-testid="time-canvas-object-list">
+          <summary className="cursor-pointer rounded-sm text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">当前时间范围的投入（{visibleSegments.length}）</summary>
+          {objectListOpen && <div className="mt-3 space-y-2">
+            <p className="text-xs text-muted-foreground">可从列表选择较短或重叠的投入；滑动时间轴可查看其他日期。</p>
+            {visibleSegments.slice(0, visibleObjectCount).map((segment) => <div key={segment.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border p-2">
+              <Button type="button" variant="ghost" className="h-auto min-h-11 min-w-0 flex-1 basis-40 flex-col items-start whitespace-normal text-left" aria-pressed={selection?.kind === "SEGMENT" && selection.id === segment.id} onClick={() => select({ kind: "SEGMENT", id: segment.id })}>
+                <span className="max-w-full break-words [overflow-wrap:anywhere]">{segment.type === "BUSY" ? "其他占用（详情受限）" : segment.title}</span>
+                <span className="max-w-full break-words text-xs font-normal text-muted-foreground [overflow-wrap:anywhere]">{model.rows.find((row) => row.id === segment.rowId)?.label} · {formatRange(segment.startMs, segment.endMs)}</span>
+              </Button>
+              {segment.permissions.canViewDetails && segment.type === "WORK" && interaction?.onSegmentOpen && <Button type="button" size="sm" variant="outline" aria-label={`${segment.permissions.canEdit ? "编辑" : "查看"}投入 ${segment.title}`} onClick={() => interaction.onSegmentOpen?.(segment.id)}>{segment.permissions.canEdit ? "编辑" : "查看详情"}</Button>}
+            </div>)}
+            {visibleSegments.length === 0 && <p className="text-sm text-muted-foreground">当前时间范围暂无投入。</p>}
+            {visibleSegments.length > visibleObjectCount && <Button type="button" variant="outline" onClick={() => setVisibleObjectCount((count) => count + 20)}>显示更多投入</Button>}
+          </div>}
+        </details>
+      )}
 
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {selectedEntity ? selectionAnnouncement(selectedEntity) : "未选择时间对象"}

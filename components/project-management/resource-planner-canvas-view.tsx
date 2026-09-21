@@ -81,7 +81,7 @@ export function ResourcePlannerCanvasView({
         <span className="text-xs text-muted-foreground">
           {readOnly
             ? ""
-            : "双击投入打开详情；总览不会直接修改既有投入。"}
+            : "点击投入后选择查看或编辑，也可双击打开详情；触摸滑动用于浏览时间轴。"}
         </span>
       </div>
 

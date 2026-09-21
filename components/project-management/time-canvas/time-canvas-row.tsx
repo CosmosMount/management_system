@@ -215,9 +215,9 @@ export function TimelineRow({
     <div
       className={cn(
         "relative overflow-hidden bg-background",
-        canBrush && "cursor-crosshair touch-none",
+        canBrush && "cursor-crosshair touch-auto",
         canCreateAnchor && "cursor-cell",
-        canSelectAnchorsWithMarquee && "cursor-crosshair touch-none",
+        canSelectAnchorsWithMarquee && "cursor-crosshair touch-auto",
         "data-[creation-drop-state=valid]:bg-emerald-50/70 data-[creation-drop-state=valid]:ring-2 data-[creation-drop-state=valid]:ring-inset data-[creation-drop-state=valid]:ring-emerald-500",
         "data-[creation-drop-state=invalid]:bg-destructive/10 data-[creation-drop-state=invalid]:ring-2 data-[creation-drop-state=invalid]:ring-inset data-[creation-drop-state=invalid]:ring-destructive",
       )}
@@ -228,6 +228,7 @@ export function TimelineRow({
       data-anchor-preview-ids={anchorPreview?.anchorIds.join(",") ?? ""}
       aria-label={`${row.label} 时间行`}
       onPointerDown={(event) => {
+        if (event.pointerType === "touch") return;
         const target = event.target;
         const startedOnObject =
           target instanceof Element && Boolean(target.closest("[data-canvas-object]"));
@@ -609,7 +610,7 @@ function CreationRangeBlock({
     <button
       type="button"
       className={cn(
-        "pointer-events-auto touch-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15 text-[10px] font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "pointer-events-auto touch-auto absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15 text-[10px] font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring",
         dropState === "valid" && "border-emerald-600 bg-emerald-100/70 text-emerald-900",
         dropState === "invalid" && "border-destructive bg-destructive/15 text-destructive",
       )}
@@ -671,7 +672,7 @@ function CreationRangeBlock({
         submit(kind, next);
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !onTransform) return;
+        if (event.pointerType === "touch" || event.button !== 0 || !onTransform) return;
         clearPendingPointerFrame();
         applyDropTarget(null);
         const target = event.target;

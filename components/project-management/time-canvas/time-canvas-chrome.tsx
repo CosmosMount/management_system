@@ -48,7 +48,7 @@ export function TimeCanvasToolbar({
   return (
     <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
       {action}
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
       <div className="flex items-center overflow-hidden rounded-md border border-border" aria-label="显示尺度">
         {zoomOrder.map((item) => (
           <Button

@@ -331,7 +331,7 @@ function GlobalMarkerHandle({
   const markerClassName = cn(
     "absolute z-20 flex h-5 max-w-52 -translate-x-1/2 items-center gap-1.5 rounded-full border border-violet-200 bg-background px-2 text-[10px] shadow-sm outline-none transition-[box-shadow,opacity] dark:border-violet-800",
     canMove &&
-      "pointer-events-auto touch-none cursor-grab hover:border-violet-300 hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500 dark:hover:border-violet-700",
+      "pointer-events-auto touch-auto cursor-grab hover:border-violet-300 hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500 dark:hover:border-violet-700",
     !canMove &&
       (showVisibleTime ? "pointer-events-none" : "pointer-events-auto cursor-help"),
     move && "cursor-grabbing border-violet-400 opacity-80 shadow-md",
@@ -409,7 +409,7 @@ function GlobalMarkerHandle({
         commitKeyboardMove(event.key === "ArrowLeft" ? -1 : 1);
       }}
       onPointerDown={(event) => {
-        if (!canMove || event.button !== 0) return;
+        if (event.pointerType === "touch" || !canMove || event.button !== 0) return;
         const scroller = event.currentTarget.closest<HTMLElement>(
           "[data-testid='time-canvas-scroll']",
         );
