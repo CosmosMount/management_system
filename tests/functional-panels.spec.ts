@@ -644,8 +644,8 @@ test.describe("管理员面板", () => {
     ).toBeVisible();
 
     await page.setViewportSize({ width: 560, height: 1000 });
-    await expect(page.getByRole("columnheader", { name: "车组", exact: true })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "技术组", exact: true })).toBeVisible();
+    await expect(page.locator('td[data-label="车组"]').first()).toBeVisible();
+    await expect(page.locator('td[data-label="技术组"]').first()).toBeVisible();
     await expect(visibleAccountList).toBeVisible();
     await expect(visibleAccountList.getByRole("button", { name: "查看记录" })).toBeVisible();
     await expectHealthyPage(page);

@@ -38,6 +38,8 @@ export function FeedbackConversation({
   statusPending,
   replyImages,
   setReplyImages,
+  replyBody,
+  onReplyBodyChange,
   onReply,
   onStatus,
 }: {
@@ -50,6 +52,8 @@ export function FeedbackConversation({
   statusPending: boolean;
   replyImages: FeedbackImageFiles["files"];
   setReplyImages: FeedbackImageFiles["setFiles"];
+  replyBody: string;
+  onReplyBodyChange: (body: string) => void;
   onReply: FormEventHandler<HTMLFormElement>;
   onStatus: (status: FeedbackStatus) => void;
 }) {
@@ -70,14 +74,14 @@ export function FeedbackConversation({
   }
 
   return (
-    <Card className="flex min-h-[32rem] min-w-0 flex-col overflow-hidden lg:h-full lg:min-h-0">
+    <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
       {feedback ? (
         <>
           <CardHeader className="shrink-0 border-b">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>反馈详情</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
+              <div className="min-w-0">
+                <CardTitle id="feedback-conversation-title" tabIndex={-1}>反馈详情</CardTitle>
+                <p className="mt-1 break-words text-sm text-muted-foreground">
                   提交人：{feedback.submitterName} · 创建于{" "}
                   {formatFeedbackTime(feedback.createdAt)}
                 </p>
@@ -103,8 +107,8 @@ export function FeedbackConversation({
               </div>
             )}
           </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-5">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-4 max-lg:px-4">
+            <div className="min-h-24 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
               {feedback.messages.map((message) => {
                 const mine = message.authorOpenId === currentUserOpenId;
                 return (
@@ -119,7 +123,7 @@ export function FeedbackConversation({
                     />
                     <div
                       className={cn(
-                        "min-w-0 max-w-[min(42rem,85%)] rounded-lg border bg-background p-3 text-left",
+                        "min-w-0 max-w-[min(42rem,calc(100%-2.75rem))] rounded-lg border bg-background p-3 text-left",
                         mine && "bg-primary/5",
                       )}
                     >
@@ -150,6 +154,8 @@ export function FeedbackConversation({
                 <Textarea
                   id="feedback-reply-body"
                   name="body"
+                  value={replyBody}
+                  aria-label="回复内容"
                   placeholder="继续补充情况，或回复处理结果"
                   rows={3}
                   disabled={replyPending}
@@ -157,7 +163,7 @@ export function FeedbackConversation({
                   aria-invalid={Boolean(replyError)}
                   aria-describedby={replyError ? "feedback-reply-error" : undefined}
                   className="max-h-24 resize-none overflow-y-auto"
-                  onChange={(event) => { if (event.target.value.trim()) setReplyError(""); }}
+                  onChange={(event) => { onReplyBodyChange(event.target.value); if (event.target.value.trim()) setReplyError(""); }}
                   onPaste={(event) => handleFeedbackPaste(event, {
                     files: replyImages,
                     setFiles: (files) => {

@@ -1,0 +1,46 @@
+@media (width < 64rem) {
+  .stacked {
+    display: block;
+    width: 100%;
+  }
+
+  .stacked > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .stacked > tbody {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .stacked > tbody > tr {
+    display: block;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 0.5rem;
+  }
+
+  .stacked > tbody > tr > td {
+    display: block;
+    max-width: none;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  .stacked > tbody > tr > td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.375rem;
+    color: var(--muted-foreground);
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+  }
+}

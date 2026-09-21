@@ -108,7 +108,7 @@ export default async function MaterialsPage({
           />
         </section>
 
-        <form className="grid gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-[minmax(0,1fr)_160px_140px_auto]">
+        <form className="grid min-w-0 gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_140px_auto]">
           <Input
             name="q"
             defaultValue={query}

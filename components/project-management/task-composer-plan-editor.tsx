@@ -56,6 +56,7 @@ import {
   renderAtMs,
   renderAtLocal,
   sortMilestonesByRenderTime,
+  validLocalDateTime,
   type ComposerPlanTimeMutationResult,
 } from "@/components/project-management/task-composer-plan-state";
 
@@ -138,6 +139,9 @@ export function TaskComposerPlanEditor({
     return () => { cancelled = true; };
   }, [initialProject?.id, state.projectId]);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
+  const [moveDays, setMoveDays] = useState("1");
+  const [moveMessage, setMoveMessage] = useState("");
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
   const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(
     () => new Set(),
@@ -320,6 +324,40 @@ export function TaskComposerPlanEditor({
   const batchDelayAffectedCount = batchDelay
     ? composerBatchDelayEntityIds(state, batchDelay.entityId).length
     : 0;
+  const validMoveDays = Number.isSafeInteger(Number(moveDays)) && Number(moveDays) > 0 && Number.isSafeInteger(Number(moveDays) * DAY_MS);
+  const moveSelectedAnchors = (direction: -1 | 1) => {
+    if (!validMoveDays || submitting) return;
+    const anchor = canvasModel.anchors.find((item) => item.id === state.selectedEntityId && activeSelectedAnchorIds.has(item.id))
+      ?? canvasModel.anchors.find((item) => activeSelectedAnchorIds.has(item.id));
+    if (!anchor) return;
+    const deltaMs = direction * Number(moveDays) * DAY_MS;
+    const selectedIds = [...activeSelectedAnchorIds];
+    if (selectedIds.some((entityId) => {
+      const candidateMs = renderAtMs(state, entityId) + deltaMs;
+      const candidateLocal = isoToShanghaiDateTimeLocal(new Date(candidateMs));
+      // Intl year formatting alone loses the era; verify the actual minute too.
+      return !validLocalDateTime(candidateLocal)
+        || localMs(candidateLocal) !== Math.floor(candidateMs / 60_000) * 60_000;
+    })) {
+      setMoveMessage("移动天数超出支持的日期范围，计划未发生任何变化。");
+      return;
+    }
+    const request: TimeCanvasAnchorMoveRequest = {
+      anchorId: anchor.id,
+      rowId: anchor.rowId,
+      kind: "KEYBOARD_MOVE",
+      atMs: anchor.atMs + deltaMs,
+      deltaMs,
+      snapMs: 60_000,
+    };
+    const resolution = onConstrainAnchorMove(request, selectedIds);
+    if (resolution.deltaMs === 0) {
+      setMoveMessage(resolution.blockedMessage ?? "所选节点已到计划边界，无法继续移动。");
+      return;
+    }
+    onMoveAnchor({ ...request, ...resolution }, selectedIds);
+    setMoveMessage(resolution.deltaMs === deltaMs ? "已整体移动所选节点，可使用撤销恢复。" : "已按计划边界调整移动距离，可使用撤销恢复。");
+  };
 
   return (
     <>
@@ -327,7 +365,7 @@ export function TaskComposerPlanEditor({
         <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="font-semibold">计划时间画布</h2>
                 <Badge variant="secondary" data-testid="task-composer-milestone-count">
                   {state.milestones.length}/200
@@ -360,8 +398,33 @@ export function TaskComposerPlanEditor({
             data-testid="task-composer-anchor-multi-selection"
           >
             <Badge variant="outline">已选 {activeSelectedAnchorIds.size} 个可编辑节点</Badge>
-            <span>Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
+            <span>可勾选节点后按天移动；鼠标也可 Shift 点击、框选和拖动。触摸滑动用于浏览时间轴。</span>
+            <Button type="button" size="sm" variant="outline" disabled={!state.selectedEntityId} onClick={() => {
+              inspectorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+              inspectorRef.current?.focus({ preventScroll: true });
+            }}>查看／编辑当前节点</Button>
           </div>
+
+          <details className="mt-3 min-w-0 rounded-lg border border-border p-3" data-testid="task-composer-touch-selection">
+            <summary className="cursor-pointer rounded-sm text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">勾选节点与批量移动</summary>
+            <fieldset className="mt-3 space-y-3" disabled={submitting}>
+              <legend className="sr-only">选择需要整体移动的节点</legend>
+              <div className="max-h-60 space-y-1 overflow-y-auto overscroll-contain">
+                {navigatorNodes.map((node) => <label key={node.id} className="flex min-h-11 min-w-0 items-center gap-3 rounded-md px-2 text-sm hover:bg-muted/40">
+                  <input type="checkbox" checked={activeSelectedAnchorIds.has(node.id)} disabled={!editableAnchorIds.has(node.id)} onChange={() => selectCanvasAnchor(node.id, true)} className="size-4 shrink-0" aria-label={`选择节点 ${node.label}`} />
+                  <span className="min-w-0 break-words [overflow-wrap:anywhere]">{node.label}<span className="ml-2 text-xs text-muted-foreground">{formatLocalDateTime(node.at)}{!editableAnchorIds.has(node.id) && " · 只读承接"}</span></span>
+                </label>)}
+              </div>
+              <div className="flex min-w-0 flex-wrap items-end gap-2">
+                <label className="min-w-0 text-sm" htmlFor="task-composer-move-days">移动天数
+                  <Input id="task-composer-move-days" type="number" min={1} step={1} inputMode="numeric" className="mt-1 w-24" value={moveDays} onChange={(event) => { setMoveDays(event.target.value); setMoveMessage(""); }} />
+                </label>
+                <Button type="button" variant="outline" disabled={!validMoveDays || activeSelectedAnchorIds.size === 0} onClick={() => moveSelectedAnchors(-1)}>提前所选节点</Button>
+                <Button type="button" variant="outline" disabled={!validMoveDays || activeSelectedAnchorIds.size === 0} onClick={() => moveSelectedAnchors(1)}>推迟所选节点</Button>
+              </div>
+              {moveMessage && <p role="status" className="text-sm text-muted-foreground">{moveMessage}</p>}
+            </fieldset>
+          </details>
 
           <div
             ref={canvasContainerRef}
@@ -490,7 +553,7 @@ export function TaskComposerPlanEditor({
         )}
       </main>
 
-      <aside className="min-w-0" aria-label="计划节点检查器">
+      <aside ref={inspectorRef} tabIndex={-1} className="min-w-0 scroll-mt-24 rounded-xl focus-visible:outline-2 focus-visible:outline-ring" aria-label="计划节点检查器">
         <div className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
           <Inspector
             state={state}

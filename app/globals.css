@@ -148,10 +148,42 @@
       oklch(0.55 0.15 264 / 6%),
       transparent
     );
+    padding-bottom: env(safe-area-inset-bottom);
   }
   html {
     @apply font-sans;
     scrollbar-gutter: stable;
+  }
+}
+
+@media (min-width: 1024px) {
+  body {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Pointer capability also covers tablets and touch-enabled narrow windows. */
+@media (pointer: coarse) {
+  [class~="group/button"],
+  [data-slot="select-trigger"],
+  [data-slot="select-item"],
+  [role="option"],
+  input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select {
+    min-height: 44px;
+  }
+  [class~="group/button"] {
+    min-width: 44px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 639px) {
+  [data-slot="dialog-content"]:not([data-navigation-drawer]) {
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   }
 }
 

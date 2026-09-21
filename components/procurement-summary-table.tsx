@@ -117,7 +117,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
           value={teamFilter}
           onValueChange={(value) => { if (value) { setTeamFilter(value); if (value !== ALL_TEAMS) setTeamExportError(""); } }}
         >
-          <SelectTrigger id="procurement-summary-team" className="w-[140px]" aria-invalid={Boolean(teamExportError)} aria-describedby={teamExportError ? "procurement-summary-team-error" : undefined}>
+          <SelectTrigger id="procurement-summary-team" aria-label="按车组筛选" className="w-[140px]" aria-invalid={Boolean(teamExportError)} aria-describedby={teamExportError ? "procurement-summary-team-error" : undefined}>
             <SelectValue placeholder="全部车组" />
           </SelectTrigger>
           <SelectContent>
@@ -134,7 +134,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
           value={techGroupFilter}
           onValueChange={(value) => value && setTechGroupFilter(value)}
         >
-          <SelectTrigger className="w-[140px]">
+          <SelectTrigger aria-label="按技术组筛选" className="w-[140px]">
             <SelectValue placeholder="全部技术组" />
           </SelectTrigger>
           <SelectContent>
@@ -187,8 +187,9 @@ export function ProcurementSummaryTable({ rows }: Props) {
           </Button>
         </div>
       </div>
-      <div className="overflow-x-auto rounded-xl border bg-card/80 shadow-sm">
-        <Table>
+      <p id="procurement-summary-scroll-hint" className="text-xs text-muted-foreground">明细表可左右滑动查看全部字段，筛选和导出位于表格上方。</p>
+      <div role="region" aria-label="采购明细汇总，可横向滚动" aria-describedby="procurement-summary-scroll-hint" tabIndex={0} className="min-w-0 max-w-full overflow-x-auto rounded-xl border bg-card/80 shadow-sm focus-visible:outline-2 focus-visible:outline-ring [&_[data-slot=table-container]]:overflow-visible">
+        <Table aria-label="采购明细汇总">
           <TableHeader>
             <TableRow>
               <TableHead>单号</TableHead>

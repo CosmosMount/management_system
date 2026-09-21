@@ -141,11 +141,11 @@ export function FrontendVersionMonitor() {
   }, []);
 
   return <>
-    <footer data-frontend-version-controls className="fixed bottom-1 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center justify-center gap-3 rounded border bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-sm" aria-label="前端版本">
-      <span>前端 v{FRONTEND_VERSION}</span>
-      <button type="button" disabled={refreshing} onClick={() => { setDismissedVersion(null); void checkRef.current(); }} className="rounded hover:text-primary focus-visible:outline-2 focus-visible:outline-ring" title={message || "检查前端资源更新"}>检查更新</button>
+    <footer data-frontend-version-controls className="relative z-40 mx-auto my-2 flex w-max max-w-[calc(100vw-2rem)] items-center justify-center gap-3 rounded border bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-sm lg:fixed lg:bottom-[max(0.25rem,env(safe-area-inset-bottom))] lg:left-1/2 lg:m-0 lg:-translate-x-1/2" aria-label="前端版本">
+      <span className="min-w-0 truncate">前端 v{FRONTEND_VERSION}</span>
+      <button type="button" disabled={refreshing} onClick={() => { setDismissedVersion(null); void checkRef.current(); }} className="min-h-8 shrink-0 whitespace-nowrap rounded hover:text-primary focus-visible:outline-2 focus-visible:outline-ring [@media(pointer:coarse)]:min-h-11" title={message || "检查前端资源更新"}>检查更新</button>
     </footer>
-    {pendingVersion && pendingVersion !== dismissedVersion && <div role="status" data-frontend-version-controls className="fixed right-4 bottom-4 z-60 max-w-[min(26rem,calc(100vw-2rem))] space-y-2 rounded-xl border bg-popover p-4 text-sm text-popover-foreground shadow-lg">
+    {pendingVersion && pendingVersion !== dismissedVersion && <div role="status" data-frontend-version-controls className="fixed right-4 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-40 max-w-[min(26rem,calc(100vw-2rem))] space-y-2 rounded-xl border bg-popover p-4 text-sm text-popover-foreground shadow-lg">
       <p className="font-medium">前端新版本 v{pendingVersion}</p>
       <p>{message || "正在更新前端资源…"}</p>
       <button type="button" disabled={refreshing} className="rounded-lg bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring" onClick={() => {

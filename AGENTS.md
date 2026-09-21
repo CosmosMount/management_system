@@ -11,7 +11,7 @@ Business correctness, server-side permissions, auditability, and notification sa
 3. Before editing, define the outcome, acceptance criteria, and risk level. Identify affected roles, routes, state transitions, records, notifications, and audit logs where applicable.
 4. Use a brief explicit plan for complex or multi-stage work; handle small, clear changes directly. Choose the smallest coherent change and reuse established patterns.
 5. Implement with focused regression coverage; run targeted checks during iteration. Update only documentation affected by the behavior change.
-6. Self-review the complete task diff, run the applicable completion gates once the change is stable, and obtain the review required by section 6.
+6. Self-review the complete task diff and run the applicable completion gates once the change is stable.
 7. Report changes, actual validation results, and remaining risks. Do not fix unrelated failures or broaden scope just to obtain a clean result.
 
 ## 2. Read on Demand
@@ -76,7 +76,7 @@ Business correctness, server-side permissions, auditability, and notification sa
 - Reuse UI primitives; preserve semantic controls, associated labels, keyboard operation, visible focus, and meaningful button names.
 - Handle applicable loading, success, empty, disabled, and error states. Show actionable field-level errors and reveal/focus the first invalid field when practical.
 - Avoid assumptions about ideal content length or record counts. Preserve stable accessible selectors or intentional `data-testid` values, not fragile CSS structure.
-- All devices use the same navigation, components, and business controls; do not add device-specific alternatives or hide features by screen width. For affected UI, test Desktop `1440x1000` and a narrow-window check of the same interface. Cover applicable long names/messages, missing data, dense lists, slow/loading states, read-only/denied access, and terminal/exceptional statuses; prevent page-level horizontal overflow while retaining intentional content/table/timeline scrolling.
+- All devices share routes, navigation data, permissions, and business behavior. Responsive layouts and narrow-screen presentation components are allowed for the full-site mobile interface, but must keep every authorized capability reachable and share form state, validation, and mutation logic; do not hide features merely by screen width or mount duplicate active forms/canvases. For affected UI, test Desktop `1440x1000` and a narrow-window check at `393x851` (also `360px` for shared layouts). Cover applicable long names/messages, missing data, dense lists, slow/loading states, read-only/denied access, and terminal/exceptional statuses; prevent page-level horizontal overflow while retaining intentional content/table/timeline scrolling.
 
 ### Documentation
 
@@ -103,7 +103,7 @@ Choose gates by the impact of the whole task, not just the last edited file. Com
 - Run `npm run build` for build, route-boundary, configuration, deployment, or dependency changes.
 - For schema/migration changes, explicitly target isolated PostgreSQL for `npm run db:deploy`, migration compatibility, and schema-drift validation following `docs/TESTING.md`; never inherit a development/production target accidentally.
 - Runner or test-safety changes also require `npm run test:playwright-db-lifecycle` and `npm run test:playwright-db-safety`. Preserve applicable specialist migration/release checks and nightly scale coverage in the testing guide.
-- Changes only to safety/validation/review policy documents need independent review but do not trigger application tests without executable changes. A documentation-only task cannot certify the underlying application's release readiness.
+- Changes only to safety/validation/review policy documents do not trigger application tests without executable changes. A documentation-only task cannot certify the underlying application's release readiness.
 
 ### Efficient, controlled execution
 
@@ -117,14 +117,13 @@ Choose gates by the impact of the whole task, not just the last edited file. Com
 
 ## 6. Review and Delivery
 
-- Self-review the entire task diff, including preservation of pre-existing user changes. Ordinary code changes require one independent subagent/reviewer pass at completion; high-risk work requires a pass for each coherent, independently verifiable stage.
-- Pure wording changes normally need only self-review. Changes to safety rules, validation gates, or review policy always require independent review even when documentation-only.
-- Give reviewers the task/acceptance criteria, exact diff or baseline, risk level, and validation evidence. Review the task diff and direct dependencies first; expand only for a concrete cross-module risk, not a routine whole-repository audit.
+- Self-review the entire task diff, including preservation of pre-existing user changes.
+- Review the task diff and direct dependencies first; expand only for a concrete cross-module risk, not a routine whole-repository audit.
 - Review applicable correctness, authorization/data exposure, state/concurrency/transactions, audit/error handling, Feishu/outbox safety, coverage reliability, shared-interface edge states, and unnecessary scope/abstraction.
-- Fix in-scope actionable findings, rerun affected checks, and request incremental re-review of fixes and affected conclusions until no new actionable issues remain. Reuse prior evidence for unchanged areas; stylistic preference alone is not an actionable finding. Report unrelated issues instead of silently fixing them.
-- Do not declare completion with an unresolved in-scope high-severity issue or required gate/review incomplete. If tooling blocks review, report the limitation and unresolved findings explicitly.
+- Fix in-scope actionable findings and rerun affected checks until no new actionable issues remain. Reuse prior evidence for unchanged areas; stylistic preference alone is not an actionable finding. Report unrelated issues instead of silently fixing them.
+- Do not declare completion with an unresolved in-scope high-severity issue or required gate incomplete. If tooling blocks validation, report the limitation and unresolved findings explicitly.
 
-Completion requires satisfied acceptance criteria, applicable safety/coverage gates, the required clean review, synchronized documentation, and no introduced secrets, temporary artifacts, debugging output, or unrelated edits.
+Completion requires satisfied acceptance criteria, applicable safety/coverage gates, completed self-review, synchronized documentation, and no introduced secrets, temporary artifacts, debugging output, or unrelated edits.
 
 Keep the final report concise: what changed and which files, important decisions, commands actually run and their results, and remaining risks/limitations/follow-up. Never claim tests passed unless they actually ran successfully.
 

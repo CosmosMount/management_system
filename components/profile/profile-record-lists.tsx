@@ -77,12 +77,12 @@ export function ProfileOrderList({ orders }: { orders: ProfileOrderRow[] }) {
                 <Link
                   href={routes.procurement.detail(order.id)}
                   className={cn(
-                    "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
+                    "flex min-w-0 flex-col items-start justify-between gap-3 rounded-lg border p-3 transition-colors hover:border-primary/30 sm:flex-row sm:items-center",
                     order.isActive && "border-primary/20 bg-primary/5",
                   )}
                 >
                   <div className="min-w-0 pr-3">
-                    <p className="font-medium">{order.orderNo}</p>
+                    <p className="break-all font-medium">{order.orderNo}</p>
                     <p className="text-sm text-muted-foreground">
                       {formatScopeItem(order.team)} /{" "}
                       {formatScopeItem(order.techGroup)} · ¥
@@ -90,7 +90,7 @@ export function ProfileOrderList({ orders }: { orders: ProfileOrderRow[] }) {
                       {formatUpdatedAt(order.updatedAt)}
                     </p>
                   </div>
-                  <Badge variant={order.isActive ? "default" : "secondary"}>
+                  <Badge className="shrink-0" variant={order.isActive ? "default" : "secondary"}>
                     {statusLabels[order.status]}
                   </Badge>
                 </Link>

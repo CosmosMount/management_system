@@ -36,10 +36,10 @@ export default async function ProfilePage() {
         intervalMs={10000}
       />
       <PageShell>
-        <main className="mx-auto max-w-3xl flex-1 space-y-8 p-4 py-8">
+        <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 space-y-6 p-4 py-6 sm:space-y-8 sm:py-8">
           <PageTitle subtitle={`${user.name} · 个人中心`} />
 
-          <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-6">
             <h2 className="mb-1 text-lg font-medium">电子签名</h2>
             <p className="mb-6 text-sm text-muted-foreground">
               验收清单中的签名将自动填入：验收人 1（车组组长）、验收人 2（技术组组长）、领用人（采购发起人）。车组组长、技术组组长须在管理审核前上传；采购发起人须在上传报销凭证前上传。
@@ -47,7 +47,7 @@ export default async function ProfilePage() {
             <SignatureUploadForm signaturePath={user.signaturePath} />
           </section>
 
-          <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-6">
             <h2 className="mb-1 text-lg font-medium">我的采购申请</h2>
             <p className="mb-4 text-sm text-muted-foreground">
               由您发起的全部采购订单，进行中的条目排在前面。

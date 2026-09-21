@@ -78,14 +78,14 @@ function DonutChart({
           </span>
         </div>
       </div>
-      <ul className="min-w-0 flex-1 space-y-2 text-sm">
+      <ul className="w-full min-w-0 flex-1 space-y-2 text-sm">
         {slices.map((slice) => (
           <li key={slice.label} className="flex items-center gap-2">
             <span
               className="h-2.5 w-2.5 shrink-0 rounded-full"
               style={{ backgroundColor: slice.color }}
             />
-            <span className="min-w-0 flex-1 truncate">{slice.label}</span>
+            <span className="min-w-0 flex-1 break-words">{slice.label}</span>
             <span className="shrink-0 text-muted-foreground">
               {((slice.value / total) * 100).toFixed(1)}%
             </span>
@@ -121,14 +121,14 @@ function HorizontalBarChart({
         const width = Math.max(4, (row.value / max) * 100);
         const inner = (
           <div className="space-y-1">
-            <div className="flex items-baseline justify-between gap-2 text-sm">
-              <span className="truncate font-medium">{row.label}</span>
+            <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+              <span className="min-w-0 break-words [overflow-wrap:anywhere] font-medium">{row.label}</span>
               <span className="shrink-0 text-muted-foreground">
                 {valueFormatter(row.value)}
               </span>
             </div>
             {row.sublabel && (
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="break-words [overflow-wrap:anywhere] text-xs text-muted-foreground">
                 {row.sublabel}
               </p>
             )}
@@ -218,15 +218,15 @@ function BudgetPoolChart({
               className="space-y-1"
               data-testid="procurement-budget-pool-row"
             >
-              <div className="flex items-baseline justify-between gap-2 text-sm">
+              <div className="flex flex-col items-start gap-1 text-sm sm:flex-row sm:items-baseline sm:justify-between sm:gap-2">
                 <div className="min-w-0">
-                  <span className="truncate font-medium">{row.name}</span>
-                  <p className="break-words text-xs text-muted-foreground">
+                  <span className="break-words font-medium">{row.name}</span>
+                  <p className="break-words [overflow-wrap:anywhere] text-xs text-muted-foreground">
                     项目：{row.projects.join("、") || "暂无项目说明"}
                   </p>
                 </div>
                 <span
-                  className={`shrink-0 ${
+                  className={`max-w-full break-words ${
                     row.usagePercent >= 70
                       ? "font-medium text-amber-600 dark:text-amber-400"
                       : "text-muted-foreground"

@@ -24,7 +24,7 @@ export default async function HomePage() {
         intervalMs={10000}
       />
       <PageShell>
-        <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
+        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-10">
           <PageTitle />
 
           <div className="flex w-full flex-col gap-4">

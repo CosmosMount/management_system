@@ -121,6 +121,11 @@ export function D110SerialPrinter(props: D110LabelContent) {
       >
         {message || availability?.message || "正在检查浏览器打印能力…"}
       </p>
+      {availability?.available === false && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          可先下载上方二维码或复制扫码链接；如需直连打印，请在支持 Web Serial 的电脑浏览器中打开此物资。
+        </p>
+      )}
     </div>
   );
 }

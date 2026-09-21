@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/table";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import styles from "./responsive-table.module.css";
 
 export function AccountsAndRolesCard({
   accounts,
@@ -113,7 +114,7 @@ export function AccountsAndRolesCard({
           ) : (
             <>
               <div className="min-w-0">
-                <Table>
+                <Table className={styles.stacked}>
                   <TableHeader>
                     <TableRow>
                       <TableHead>用户</TableHead>
@@ -126,16 +127,16 @@ export function AccountsAndRolesCard({
                   <TableBody>
                     {accounts.map((account) => (
                       <TableRow key={account.id}>
-                        <TableCell>
+                        <TableCell data-label="用户">
                           <AccountIdentity account={account} showOpenId={false} />
                         </TableCell>
-                        <TableCell className="max-w-48 truncate font-mono text-xs">
+                        <TableCell data-label="openId" className="max-w-48 truncate font-mono text-xs">
                           {account.identities[0]?.openId ?? "缺少飞书身份"}
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="入库时间">
                           {new Date(account.createdAt).toLocaleString("zh-CN")}
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="当前角色">
                           <InlineAccountRoles
                             account={account}
                             pending={pending}
@@ -143,7 +144,7 @@ export function AccountsAndRolesCard({
                             onResponsibilityRemove={onResponsibilityRemove}
                           />
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell data-label="记录" className="text-right">
                           <Button
                             type="button"
                             variant="outline"
@@ -280,7 +281,7 @@ function GeneralRoleAssignmentForm({
   }
 
   return (
-    <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(12rem,1fr)_11rem_10rem_auto] sm:items-end">
+    <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_11rem_10rem_auto] md:items-end">
       <label className="min-w-0 space-y-2">
         <span className="block text-sm font-medium">用户</span>
         <AdminAccountSelect
@@ -376,7 +377,7 @@ function RoleScopeSelect({
   const teamScoped = role === "TEAM_ADMIN" || role === "FINANCE";
   const techGroupScoped = role === "TECH_GROUP_ADMIN" || role === "TEACHER";
   if (!teamScoped && !techGroupScoped) {
-    return <div className="h-[3.25rem]" aria-hidden="true" />;
+    return <div className="hidden h-[3.25rem] md:block" aria-hidden="true" />;
   }
   const options = teamScoped ? TEAM_OPTIONS : TECH_GROUP_OPTIONS;
   const label = teamScoped ? "车组" : "技术组";

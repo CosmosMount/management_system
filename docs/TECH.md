@@ -279,9 +279,9 @@ Action Inbox 聚合的稳定公共出口位于 `lib/project-management/queries/a
 
 全局队列按严重度、相关时间和稳定业务 ID 合并。首次查询时间固定为 `generatedAt`，后续页沿用该时间计算逾期和严重度；版本化 Base64URL 游标绑定 `accountId/personId/generatedAt`，保存六条流各自的 `(relevantAt,id)` keyset 位置，并使用 `AUTH_SECRET`（兼容 `NEXTAUTH_SECRET`）进行 HMAC 签名，加载前还会复核游标锚点仍属于当前 actor 的队列。完整页每次读取 50 项并通过只读 Server Action `app/actions/project-management/action-inbox.ts` 加载更多，驾驶舱只请求前 8 项。DTO 显式返回 Project、Task、Node 类型/状态、相关时间和操作文案。通用纵向列表样式由 `components/ui/list.tsx` 提供语义化 `List/ListItem/ListContent/ListActions/ListEmpty`；本次仅迁移 Action Inbox，其他业务可逐步复用同一风格。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。统一使用可折叠的 sticky 左侧导航。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`kanban`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals` 均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面使用可折叠的 sticky 左侧导航，窄屏使用保留完整入口的模块导航抽屉。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`kanban`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals` 均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
 
-采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由统一侧栏承担。独立工坊加工费入口已下线，旧路径返回 404；普通采购明细中的加工费种类与历史 `isWorkshopFee` 订单保持兼容。
+采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由统一侧栏或窄屏导航抽屉承担。独立工坊加工费入口已下线，旧路径返回 404；普通采购明细中的加工费种类与历史 `isWorkshopFee` 订单保持兼容。
 
 Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REVISION` 四种模式。桌面端按“基本资料 / 计划节点 / 检查保存或送审”分区，补充说明与可选关联按需展开；计划区由画布和节点编辑组成，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。桌面 TimeCanvas 另维护瞬时的可编辑锚点集合，支持 Shift 增减、空白矩形框选和整组拖动；集合不属于 `TaskComposerSeed`，不进入提交 payload、v4 本地草稿、数据库、审计或通知。桌面批量移动要求显式选择“当前及后续”或“仅已选节点”，再按正整数天前移或后移；“当前及后续”以当前焦点的移动前时间为边界并跳过只读承接节点，“仅已选节点”只接受完整的可编辑选中组。整组移动先对所有目标应用同一时间差，再校验完整计划，任一节点冲突、越界或违反 Revision 锁定边界时零修改；成功只提交一个历史项。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；Task 编辑保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。Revision 模式固定 Start，把已完成 Milestone 和已生效 Revision 作为只读承接节点，仅提交可替换 Milestone、当前 Revision 时间/原因和 Terminal；这些只读承接节点也不会加入桌面多选，Revision Marker 不参与阶段带边界。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
 
@@ -291,7 +291,7 @@ Composer 的浏览器安全契约位于 `lib/project-management/composer-contrac
 
 TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支持周/月/季/年缩放、虚拟行、键盘焦点、刷选、Segment 横移/缩放和节点锚点；同时保留精确表单。资源计划按不超过 180 天的上海时区块自适应加载并缓存，URL 使用 `focus`、`center`、`scale`、`projects`/`tasks`/`people` 和 Task 状态多选 `taskStatuses`；缺失 `taskStatuses` 规范化为默认 `DRAFT,ACTIVE` 并在 URL 中省略，空集合保留为 `taskStatuses=`，非默认集合按固定枚举顺序序列化。`focus` 可定位投入及人员，但不绕过状态筛选增加 Task 计划。`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end`、`zoom` 以及已退役的 `taskCursor`/`personCursor` 会被忽略并从规范 URL 移除。mutation 后以权威刷新为准。详情 Dialog 只向目标 Segment 注入可编辑 transform；详情与悬浮提示都展示关联 Task 名称，无 Task 时显示“独立投入”，Busy 不泄露 Task。
 
-统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；可选的锚点多选交互按可编辑锚点中心点完成矩形命中，并以同一画布时间差预览和移动整组，通用时间数学保证整组仍位于半开区间。Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界、Revision 只读排除和 Milestone 自动重排仍由 Composer 负责。人员投入总览覆盖既有 Segment 的写权限，只保留双击/Enter 打开详情；详情 Dialog 才向目标 Segment 注入 transform 回调，同一行其他 Segment 始终只读。所有视口均使用 `@tanstack/react-virtual` 的横向时间画布，窄屏仅在画布容器内滚动。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
+统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；可选的锚点多选交互按可编辑锚点中心点完成矩形命中，并以同一画布时间差预览和移动整组，通用时间数学保证整组仍位于半开区间。Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界、Revision 只读排除和 Milestone 自动重排仍由 Composer 负责。人员投入总览覆盖既有 Segment 的写权限，通过双击、Enter 或显式按钮打开详情；详情 Dialog 才向目标 Segment 注入 transform 回调，同一行其他 Segment 始终只读。所有视口均使用 `@tanstack/react-virtual` 的横向时间画布，窄屏仅在画布容器内滚动。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 
 TimeCanvas 的键盘焦点、刷选与 Segment 变换数学、只读 Inspector、工具栏/Axis/底部滚动条、全局关键时间点层、上海日历网格/阶段轨道/今日线以及共享布局常量已经从主渲染器分离；主渲染器继续只负责编排、虚拟化、视口/选择与 Inspector，行级刷选和创建区间位于 `time-canvas-row.tsx`，Segment/Anchor 对象交互位于 `time-canvas-objects.tsx`，内部依赖保持 `time-canvas → row → objects` 单向；资源计划客户端的分块缓存与 URL 同步、展示骨架也各自拥有独立模块。`resource-planner-panels.tsx` 保留 Quick Create、Segment Inspector、范围格式化和草稿范围计算的稳定公共出口，Quick Create 位于 `resource-planner-quick-create-panel.tsx`，两类面板共用的 DTO、字段容器和上海时间范围校验位于 `resource-planner-panel-support.tsx`；Segment Inspector 与计划确认表单继续内聚。Plan 转 Actual 时，完整确认、部分确认和批量确认都必须提交实际输出；预期输出不要求用户重复填写，由 Actual 继承 Planned 的值。部分确认表单不收集原因，除确认范围和实际输出外仍要求实际投入内容；服务端继续生成系统变更说明。页面继续只依赖稳定的 `TimeCanvasProps`/`TimeCanvasModel`，直接拖动不按屏幕尺寸限制，详情内仍仅目标 Segment 可编辑。
 
@@ -304,6 +304,14 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 `20260814120000_retire_project_management_legacy_history` 在单一事务中完成最终历史收敛。它先阻断仍有效的旧项目系统角色或旧 Task 成员角色，再以稳定 migration ID 归档已撤销/结束角色和非空 `WorkSegment.completionPercent`，删除对应历史行/列并重建最终角色枚举。迁移不访问通知表；回归以通知全行快照验证既有记录不变，并覆盖迁移期间无关通知并发写入可正常提交，不用易受全库并发影响的行数门禁。重复部署不会产生重复审计。迁移回归还必须验证 append-only 保护、完整 migration chain 与 Prisma schema drift。
 
 ### 项目管理 UI 基础规范
+
+全站采用同路由响应式界面：`ManagementShell` 主内容按可用宽度布局，不设置桌面最小宽度；1024px 以下通过 `NavigationDrawer` 提供系统/模块入口，复用桌面导航数据。抽屉只包含导航，不重复挂载业务内容；路由及查询变化后关闭，未保存守卫阻止导航时保留当前页面。画布、采购汇总和宽表只在各自容器内滚动。基础 Dialog 按动态视口限制高度，触摸输入和常用按钮扩大点击区域，时间画布绝对定位对象保持轨道尺寸。
+
+前端版本控件在窄屏置于文档流末尾，避免遮挡长表单；桌面保留固定底栏并预留底部空间。新版本提示计入底部安全区，层级低于业务弹窗。
+
+采购密集表格在 768px 以下、管理员密集表格在 1024px 以下，通过领域 CSS module 重排同一份 table DOM，并显示字段标签；编辑行、文件选择和 mutation 状态不因断点重置。项目/任务列表在窄屏使用卡片布局。反馈用 URL 的 `selected` 控制手机列表/会话呈现，两块区域保持挂载；未发送文字和图片在当前页面按会话 ID 保留，不新增服务器草稿或本地存储。
+
+时间画布触摸事件用于浏览和选择，不进入鼠标拖动/框选修改分支。投入提供显式详情按钮与当前可见时间范围列表，列表分批展示现有安全 DTO 中的记录；Busy 不开放详情。Composer 的节点勾选、按天移动与原有画布共用选择、约束和撤销回调，不改变提交类型或服务端接口。
 
 详情深链中的 `focus` 用于首次定位；用户显式切换分区时消费该参数，保留 `center`、`scale` 及当前页面的节点选择，避免旧定位的服务端规范重定向覆盖新的分区导航。浏览器返回原深链仍重新应用定位；项目范围外定位只发起一次带新 `focus` 的导航。
 

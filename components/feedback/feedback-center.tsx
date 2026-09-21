@@ -22,6 +22,9 @@ import type {
   FeedbackView,
 } from "@/components/feedback/feedback-types";
 import { toast } from "sonner";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export type { FeedbackView } from "@/components/feedback/feedback-types";
 
@@ -61,10 +64,10 @@ export function FeedbackCenter({
   const [replyPending, setReplyPending] = useState(false);
   const [statusPending, setStatusPending] = useState(false);
   const [createImages, setCreateImages] = useState<FeedbackImageFile[]>([]);
-  const [replyImageState, setReplyImageState] = useState<{
-    feedbackId: string;
-    files: FeedbackImageFile[];
-  }>({ feedbackId: "", files: [] });
+  const [replyImageState, setReplyImageState] = useState<
+    Record<string, FeedbackImageFile[]>
+  >({});
+  const [replyBodies, setReplyBodies] = useState<Record<string, string>>({});
   const createImagesRef = useRef<FeedbackImageFile[]>([]);
   const replyImagesRef = useRef<FeedbackImageFile[]>([]);
   const newOpen = newOpenState || newFromUrl;
@@ -74,8 +77,8 @@ export function FeedbackCenter({
   }, [createImages]);
 
   useEffect(() => {
-    replyImagesRef.current = replyImageState.files;
-  }, [replyImageState.files]);
+    replyImagesRef.current = Object.values(replyImageState).flat();
+  }, [replyImageState]);
 
   useEffect(() => {
     return () => {
@@ -110,10 +113,10 @@ export function FeedbackCenter({
   const canReply =
     !!selectedFeedback &&
     (isSuperAdmin || selectedFeedback.status !== "CLOSED");
-  const replyImages =
-    selectedFeedback?.id === replyImageState.feedbackId
-      ? replyImageState.files
-      : [];
+  const replyImages = selectedFeedback
+    ? replyImageState[selectedFeedback.id] ?? []
+    : [];
+  const mobileConversationOpen = Boolean(selectedFromUrlFeedback);
 
   function clearCreateImages() {
     revokeFeedbackImages(createImages);
@@ -121,16 +124,16 @@ export function FeedbackCenter({
   }
 
   function setReplyImages(files: FeedbackImageFile[]) {
-    setReplyImageState({ feedbackId: selectedFeedback?.id ?? "", files });
+    if (!selectedFeedback) return;
+    setReplyImageState((current) => ({ ...current, [selectedFeedback.id]: files }));
   }
 
-  function clearReplyImages() {
-    revokeFeedbackImages(replyImageState.files);
-    setReplyImageState({ feedbackId: "", files: [] });
+  function clearReplyImages(feedbackId: string) {
+    revokeFeedbackImages(replyImageState[feedbackId] ?? []);
+    setReplyImageState((current) => ({ ...current, [feedbackId]: [] }));
   }
 
   function handleFilterChange(filter: FeedbackFilter) {
-    clearReplyImages();
     setHasManualFilter(true);
     setStatusFilter(filter);
     router.replace("/feedback", { scroll: false });
@@ -176,7 +179,8 @@ export function FeedbackCenter({
       await replyFeedback(buildFeedbackFormData(form, replyImages));
       toast.success("回复已发送");
       form.reset();
-      clearReplyImages();
+      clearReplyImages(selectedFeedback.id);
+      setReplyBodies((current) => ({ ...current, [selectedFeedback.id]: "" }));
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "发送失败");
@@ -203,34 +207,70 @@ export function FeedbackCenter({
   }
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto [scrollbar-gutter:stable] lg:h-full lg:grid-cols-[22rem_minmax(0,1fr)] lg:overflow-hidden">
-      <FeedbackList
-        feedbacks={filteredFeedbacks}
-        selectedFeedbackId={selectedFeedback?.id}
-        statusFilter={effectiveStatusFilter}
-        isSuperAdmin={isSuperAdmin}
-        onNew={() => setNewOpenState(true)}
-        onFilterChange={handleFilterChange}
-        onSelect={(feedbackId) => {
-          if (feedbackId !== selectedFeedback?.id) clearReplyImages();
-          setSelectedId(feedbackId);
-          pushSelectedFeedbackUrl(feedbackId);
-        }}
-      />
-      <FeedbackConversation
-        key={selectedFeedback?.id ?? "none"}
-        feedback={selectedFeedback}
-        avatarByOpenId={avatarByOpenId}
-        currentUserOpenId={currentUserOpenId}
-        isSuperAdmin={isSuperAdmin}
-        canReply={canReply}
-        replyPending={replyPending}
-        statusPending={statusPending}
-        replyImages={replyImages}
-        setReplyImages={setReplyImages}
-        onReply={handleReply}
-        onStatus={handleStatus}
-      />
+    <div className="grid min-h-0 min-w-0 flex-1 gap-4 overflow-hidden lg:h-full lg:grid-cols-[22rem_minmax(0,1fr)]">
+      <div
+        data-testid="feedback-list-panel"
+        className={cn("min-h-0 min-w-0 lg:block", mobileConversationOpen && "hidden")}
+      >
+        <FeedbackList
+          feedbacks={filteredFeedbacks}
+          selectedFeedbackId={selectedFeedback?.id}
+          statusFilter={effectiveStatusFilter}
+          isSuperAdmin={isSuperAdmin}
+          onNew={() => setNewOpenState(true)}
+          onFilterChange={handleFilterChange}
+          onSelect={(feedbackId) => {
+            setSelectedId(feedbackId);
+            pushSelectedFeedbackUrl(feedbackId);
+            requestAnimationFrame(() => {
+              document.getElementById("feedback-conversation-title")?.focus({ preventScroll: true });
+            });
+          }}
+        />
+      </div>
+      <div
+        data-testid="feedback-conversation-panel"
+        className={cn("min-h-0 min-w-0 flex-col gap-2 lg:flex", mobileConversationOpen ? "flex" : "hidden")}
+      >
+        <Button
+          type="button"
+          variant="outline"
+          className="shrink-0 self-start lg:hidden"
+          onClick={() => {
+            const params = new URLSearchParams(window.location.search);
+            params.delete("selected");
+            const query = params.toString();
+            window.history.pushState(null, "", query ? `/feedback?${query}` : "/feedback");
+            if (selectedFeedback) {
+              requestAnimationFrame(() => {
+                document.querySelector<HTMLButtonElement>(`[data-feedback-id="${CSS.escape(selectedFeedback.id)}"]`)?.focus({ preventScroll: true });
+              });
+            }
+          }}
+        >
+          <ArrowLeft aria-hidden="true" />返回反馈列表
+        </Button>
+        <FeedbackConversation
+          key={selectedFeedback?.id ?? "none"}
+          feedback={selectedFeedback}
+          avatarByOpenId={avatarByOpenId}
+          currentUserOpenId={currentUserOpenId}
+          isSuperAdmin={isSuperAdmin}
+          canReply={canReply}
+          replyPending={replyPending}
+          statusPending={statusPending}
+          replyImages={replyImages}
+          setReplyImages={setReplyImages}
+          replyBody={selectedFeedback ? replyBodies[selectedFeedback.id] ?? "" : ""}
+          onReplyBodyChange={(body) => {
+            if (selectedFeedback) {
+              setReplyBodies((current) => ({ ...current, [selectedFeedback.id]: body }));
+            }
+          }}
+          onReply={handleReply}
+          onStatus={handleStatus}
+        />
+      </div>
       <NewFeedbackDialog
         key={newOpen ? "new-feedback-open" : "new-feedback-closed"}
         open={newOpen}

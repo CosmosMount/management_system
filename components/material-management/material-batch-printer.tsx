@@ -209,6 +209,11 @@ export function MaterialBatchPrinter({
         >
           {message || availability?.message || "正在检查浏览器打印能力…"}
         </p>
+        {availability?.available === false && (
+          <p className="mb-3 text-sm text-muted-foreground">
+            可进入物资详情下载二维码或复制扫码链接；批量直连打印需要支持 Web Serial 的电脑浏览器。
+          </p>
+        )}
         {children}
       </div>
     </MaterialBatchPrintSelectionContext.Provider>

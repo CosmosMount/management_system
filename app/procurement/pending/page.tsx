@@ -135,14 +135,14 @@ function OrderLinks({
         <li key={order.id}>
           <Link
             href={order.href}
-            className="flex min-w-0 items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:border-primary/30 hover:bg-muted/30"
+            className="flex min-w-0 flex-col items-start gap-3 rounded-lg border p-3 transition-colors hover:border-primary/30 hover:bg-muted/30 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="min-w-0">
               <p className="flex min-w-0 items-center gap-1.5 font-medium">
                 <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{order.orderNo}</span>
               </p>
-              <p className="break-words text-sm text-muted-foreground">
+              <p className="break-words [overflow-wrap:anywhere] text-sm text-muted-foreground">
                 {order.initiatorName} · {order.team} / {order.techGroup} · ¥
                 {order.totalPrice.toFixed(2)}
               </p>

@@ -28,6 +28,7 @@ import {
 import { DEFAULT_BUDGET_PERIOD } from "@/lib/procurement-budget-period";
 import { MAX_BUDGET_POOL_IMPORT_ROWS } from "@/lib/constants";
 import { getActionErrorMessage } from "@/lib/action-error-message";
+import styles from "@/components/admin/responsive-table.module.css";
 
 export type AdminBudgetPool = Awaited<
   ReturnType<typeof listAdminBudgetPools>
@@ -80,8 +81,8 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div>
+      <CardHeader className="flex flex-col items-start justify-between gap-4 sm:flex-row">
+        <div className="min-w-0">
           <CardTitle>采购预算池</CardTitle>
           <CardDescription>
             Excel 每行填写项目、兵种组与预算；系统按兵种组汇总，一个兵种组一栏并列出包含的项目。相同项目+兵种组+周期会合并预算。单次最多{" "}
@@ -126,7 +127,7 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
             当前周期（{DEFAULT_BUDGET_PERIOD}）暂无预算池，请导入 Excel。
           </p>
         ) : (
-          <Table>
+          <Table className={styles.stacked}>
             <TableHeader>
               <TableRow>
                 <TableHead>兵种组</TableHead>
@@ -139,15 +140,15 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
             <TableBody>
               {pools.map((pool) => (
                 <TableRow key={pool.id}>
-                  <TableCell>{pool.team}</TableCell>
-                  <TableCell className="max-w-72 whitespace-normal break-words">
+                  <TableCell data-label="兵种组">{pool.team}</TableCell>
+                  <TableCell data-label="项目" className="max-w-72 whitespace-normal break-words">
                     {pool.projects.join("、") || "—"}
                   </TableCell>
-                  <TableCell>{pool.period}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell data-label="周期">{pool.period}</TableCell>
+                  <TableCell data-label="预算金额" className="text-right">
                     ¥{pool.budgetAmount.toLocaleString("zh-CN")}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell data-label="已提醒阈值" className="text-right">
                     {pool.lastAlertThreshold > 0
                       ? `${pool.lastAlertThreshold}%`
                       : "—"}

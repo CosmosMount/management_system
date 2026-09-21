@@ -7,6 +7,7 @@ import { OrderActions } from "@/components/order-actions";
 import { OrderDraftActions } from "@/components/order-draft-actions";
 import { PurchaseOrderDeleteButton } from "@/components/admin-delete-actions";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
+import styles from "@/components/procurement/procurement-responsive.module.css";
 import { Badge } from "@/components/ui/badge";
 import { PurchaseItemReferenceCell } from "@/components/purchase-item-reference-cell";
 import { formatPurchaseItemKind } from "@/lib/purchase-item-kind";
@@ -78,18 +79,18 @@ export function OrdersTable({
   }
 
   return (
-    <Table>
+    <Table className={`${styles.cards} ${styles.readableTable}`} aria-label="采购订单" role="table">
       <TableHeader>
         <TableRow>
           <TableHead className="w-8" />
-          <TableHead>单号</TableHead>
+          <TableHead className="w-[18%]">单号</TableHead>
           <TableHead>发起人</TableHead>
           <TableHead>车组</TableHead>
           <TableHead>技术组</TableHead>
           <TableHead>总价</TableHead>
-          <TableHead>状态</TableHead>
+          <TableHead className="w-[13%]">状态</TableHead>
           <TableHead>创建时间</TableHead>
-          <TableHead>操作</TableHead>
+          <TableHead className="w-[22%]">操作</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -111,23 +112,27 @@ export function OrdersTable({
 
           return (
             <Fragment key={order.id}>
-              <TableRow>
-                <TableCell>
+              <TableRow data-testid={`procurement-order-${order.id}`}>
+                <TableCell className={styles.toggleCell}>
                   <button
                     type="button"
                     onClick={() =>
                       setExpanded(expanded === order.id ? null : order.id)
                     }
-                    className="text-muted-foreground hover:text-foreground"
+                    className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+                    aria-expanded={expanded === order.id}
+                    aria-controls={`order-items-${order.id}`}
+                    aria-label={`${expanded === order.id ? "收起" : "展开"} ${order.orderNo} 明细`}
                   >
                     {expanded === order.id ? (
                       <ChevronDown className="h-4 w-4" />
                     ) : (
                       <ChevronRight className="h-4 w-4" />
                     )}
+                    <span className="md:hidden">{expanded === order.id ? "收起明细" : "展开明细"}</span>
                   </button>
                 </TableCell>
-                <TableCell>
+                <TableCell data-wide data-label="单号">
                   <Link
                     href={`${routes.procurement.detail(order.id)}`}
                     className="inline-flex items-center gap-1.5 font-medium hover:underline"
@@ -136,58 +141,60 @@ export function OrdersTable({
                     {order.orderNo}
                   </Link>
                 </TableCell>
-                <TableCell>{order.initiatorName}</TableCell>
-                <TableCell>{order.team}</TableCell>
-                <TableCell>{order.techGroup}</TableCell>
-                <TableCell>¥{order.totalPrice.toFixed(2)}</TableCell>
-                <TableCell>
-                  <Badge variant="outline">{statusLabels[order.status]}</Badge>
+                <TableCell data-label="发起人">{order.initiatorName}</TableCell>
+                <TableCell data-label="车组">{order.team}</TableCell>
+                <TableCell data-label="技术组">{order.techGroup}</TableCell>
+                <TableCell data-label="总价">¥{order.totalPrice.toFixed(2)}</TableCell>
+                <TableCell data-wide data-label="状态">
+                  <Badge variant="outline" className="max-w-full whitespace-normal">{statusLabels[order.status]}</Badge>
                 </TableCell>
-                <TableCell>
+                <TableCell data-wide data-label="创建时间">
                   {new Date(order.createdAt).toLocaleString("zh-CN")}
                 </TableCell>
-                <TableCell className="space-x-2">
-                  <OrderDraftActions
-                    orderId={order.id}
-                    status={order.status}
-                    userOpenId={userOpenId}
-                    initiatorOpenId={order.initiatorOpenId}
-                    hasSignature={hasSignature}
-                  />
-                  <OrderActions
-                    orderId={order.id}
-                    status={order.status}
-                    order={orderScope}
-                    userRoles={userRoles}
-                    managementState={managementState}
-                    hasSignature={hasSignature}
-                  />
-                  <OrderReimbursementActions
-                    orderId={order.id}
-                    items={order.items.map((item) => ({
-                      id: item.id,
-                      name: item.name,
-                      spec: item.spec,
-                      quantity: item.quantity,
-                      unitPrice: item.unitPrice,
-                    }))}
-                    status={order.status}
-                    orderScope={orderScope}
-                    userRoles={userRoles}
-                    userOpenId={userOpenId}
-                    initiatorOpenId={order.initiatorOpenId}
-                    attachments={attachments}
-                    canViewAttachments={canViewAttachments}
-                  />
-                  <PurchaseOrderDeleteButton orderId={order.id} userRoles={userRoles} />
+                <TableCell data-wide data-label="操作">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <OrderDraftActions
+                      orderId={order.id}
+                      status={order.status}
+                      userOpenId={userOpenId}
+                      initiatorOpenId={order.initiatorOpenId}
+                      hasSignature={hasSignature}
+                    />
+                    <OrderActions
+                      orderId={order.id}
+                      status={order.status}
+                      order={orderScope}
+                      userRoles={userRoles}
+                      managementState={managementState}
+                      hasSignature={hasSignature}
+                    />
+                    <OrderReimbursementActions
+                      orderId={order.id}
+                      items={order.items.map((item) => ({
+                        id: item.id,
+                        name: item.name,
+                        spec: item.spec,
+                        quantity: item.quantity,
+                        unitPrice: item.unitPrice,
+                      }))}
+                      status={order.status}
+                      orderScope={orderScope}
+                      userRoles={userRoles}
+                      userOpenId={userOpenId}
+                      initiatorOpenId={order.initiatorOpenId}
+                      attachments={attachments}
+                      canViewAttachments={canViewAttachments}
+                    />
+                    <PurchaseOrderDeleteButton orderId={order.id} userRoles={userRoles} />
+                  </div>
                 </TableCell>
               </TableRow>
               {expanded === order.id && (
                 <TableRow>
-                  <TableCell colSpan={9} className="bg-muted/30">
+                  <TableCell colSpan={9} data-wide id={`order-items-${order.id}`} className="bg-muted/30">
                     <div className="space-y-2 p-2">
                       <p className="text-sm font-medium">明细条目</p>
-                      <Table>
+                      <Table className={`${styles.cards} ${styles.readableTable}`} aria-label={`${order.orderNo} 采购明细`} role="table">
                         <TableHeader>
                           <TableRow>
                             <TableHead>物品名称</TableHead>
@@ -202,12 +209,12 @@ export function OrdersTable({
                         <TableBody>
                           {order.items.map((item) => (
                             <TableRow key={item.id}>
-                              <TableCell>{item.name}</TableCell>
-                              <TableCell>{item.spec}</TableCell>
-                              <TableCell>
+                              <TableCell data-wide data-label="物品名称">{item.name}</TableCell>
+                              <TableCell data-wide data-label="规格">{item.spec}</TableCell>
+                              <TableCell data-label="种类">
                                 {formatPurchaseItemKind(item.itemKind)}
                               </TableCell>
-                              <TableCell>
+                              <TableCell data-label="链接/图片">
                                 <PurchaseItemReferenceCell
                                   itemKind={item.itemKind}
                                   purchaseLink={item.purchaseLink}
@@ -215,9 +222,9 @@ export function OrdersTable({
                                   referenceImagePaths={item.referenceImagePaths}
                                 />
                               </TableCell>
-                              <TableCell>{item.quantity}</TableCell>
-                              <TableCell>¥{item.unitPrice.toFixed(2)}</TableCell>
-                              <TableCell>
+                              <TableCell data-label="数量">{item.quantity}</TableCell>
+                              <TableCell data-label="单价">¥{item.unitPrice.toFixed(2)}</TableCell>
+                              <TableCell data-label="小计">
                                 ¥
                                 {(item.quantity * item.unitPrice).toFixed(2)}
                               </TableCell>

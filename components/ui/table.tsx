@@ -13,7 +13,7 @@ function Table({
     <div
       data-slot="table-container"
       className={cn(
-        "relative",
+        "relative min-w-0 max-w-full",
         fitContent ? "w-fit max-w-full" : "w-full overflow-x-auto",
       )}
     >
