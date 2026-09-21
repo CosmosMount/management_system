@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
 import { AttachmentFileLink } from "@/components/attachment-file-link";
 import { MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
+import styles from "@/components/procurement/procurement-responsive.module.css";
 
 export type PurchaseLineItem = {
   id: string;
@@ -188,7 +189,7 @@ export function PurchaseLineConfirm({
   }
 
   return (
-    <div className={showPhotoUpload ? "w-fit max-w-full space-y-3" : "space-y-3"}>
+    <div className={`${styles.lineContainer} min-w-0 max-w-full space-y-3`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Label>{editable ? "采购明细" : "采购明细价格确认"}</Label>
         {allowRowEdit && editable ? (
@@ -205,13 +206,12 @@ export function PurchaseLineConfirm({
         ) : null}
       </div>
       <div
-        className={
-          showPhotoUpload
-            ? "w-fit max-w-full rounded-lg border"
-            : "overflow-x-auto rounded-lg border"
-        }
+        role="region"
+        aria-label="采购明细编辑区，宽表可横向滚动"
+        tabIndex={0}
+        className="max-w-full overflow-x-auto rounded-lg border focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <Table fitContent={showPhotoUpload}>
+        <Table fitContent={showPhotoUpload} className={styles.cards} aria-label="采购明细价格确认" role="table">
           <TableHeader>
             <TableRow>
               <TableHead>物品</TableHead>
@@ -226,12 +226,13 @@ export function PurchaseLineConfirm({
           <TableBody>
             {rows.map((row) => (
               <TableRow key={row.id}>
-                <TableCell>
+                <TableCell data-wide data-label="物品">
                   {editable ? (
                     <div>
                       <Input
                         className="h-8 min-w-[8rem]"
                         id={`purchase-line-${row.id}-name`}
+                        aria-label="物品名称"
                         value={row.name}
                         placeholder="物品名称"
                         aria-invalid={Boolean(errors[row.id]?.name)}
@@ -246,12 +247,13 @@ export function PurchaseLineConfirm({
                     row.name
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell data-wide data-label="规格" className="text-muted-foreground">
                   {editable ? (
                     <div>
                       <Input
                         className="h-8 min-w-[6rem]"
                         id={`purchase-line-${row.id}-spec`}
+                        aria-label="规格"
                         value={row.spec}
                         placeholder="规格"
                         aria-invalid={Boolean(errors[row.id]?.spec)}
@@ -266,7 +268,7 @@ export function PurchaseLineConfirm({
                     row.spec
                   )}
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell data-label="数量" className="text-right">
                   {editable ? (
                     <div>
                       <Input
@@ -275,6 +277,7 @@ export function PurchaseLineConfirm({
                         step={1}
                         className="ml-auto h-8 w-20 text-right"
                         id={`purchase-line-${row.id}-quantity`}
+                        aria-label="数量"
                         value={row.quantity}
                         aria-invalid={Boolean(errors[row.id]?.quantity)}
                         aria-describedby={errors[row.id]?.quantity ? `purchase-line-${row.id}-quantity-error` : undefined}
@@ -293,13 +296,14 @@ export function PurchaseLineConfirm({
                     row.quantity
                   )}
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell data-label="行总价" className="text-right">
                   {editable ? (
                     <Input
                       type="number"
                       min={0}
                       step="0.01"
                       className="ml-auto h-8 w-28 text-right"
+                      aria-label="行总价"
                       value={row.lineTotal}
                       onChange={(e) =>
                         patchLine(row.id, {
@@ -311,11 +315,11 @@ export function PurchaseLineConfirm({
                     `¥${row.lineTotal.toFixed(2)}`
                   )}
                 </TableCell>
-                <TableCell className="text-right text-muted-foreground">
+                <TableCell data-label="单价" className="text-right text-muted-foreground">
                   ¥{row.unitPrice.toFixed(2)}
                 </TableCell>
                 {showPhotoUpload && (
-                  <TableCell>
+                  <TableCell data-wide data-label="实物照片（每项一张）">
                     <div className="space-y-1">
                       {row.photoPath ? (
                         <div className="space-y-1">
@@ -353,7 +357,7 @@ export function PurchaseLineConfirm({
                   </TableCell>
                 )}
                 {allowRowEdit && editable ? (
-                  <TableCell>
+                  <TableCell data-wide>
                     <Button
                       type="button"
                       variant="ghost"

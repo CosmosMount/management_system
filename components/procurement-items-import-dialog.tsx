@@ -174,7 +174,7 @@ export function ProcurementItemsImportDialog({
         </div>
 
         {result && (
-          <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm">
+          <div className="max-h-48 min-w-0 space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm [overflow-wrap:anywhere]">
             <p>
               文件：<strong>{fileName}</strong>；成功解析{" "}
               <strong>{result.items.length}</strong> 条

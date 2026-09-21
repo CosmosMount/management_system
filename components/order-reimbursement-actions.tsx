@@ -412,7 +412,7 @@ function ApplicantDocsDialog({
             {description}
           </DialogDescription>
         </DialogHeader>
-        <form id={`applicant-docs-${orderId}`} className="w-fit max-w-full space-y-3">
+        <form id={`applicant-docs-${orderId}`} className="w-full max-w-full space-y-3">
           {orderStatus &&
           shouldShowProcurementRejectionNotice(orderStatus, rejectionReason) ? (
             <OrderRejectionNotice

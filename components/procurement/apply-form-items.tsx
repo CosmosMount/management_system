@@ -82,14 +82,14 @@ export function ApplyFormItems({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <CardTitle>采购明细</CardTitle>
           <CardDescription>
             元器件与标准件填写采购链接；加工费须选择加工商并上传图片
           </CardDescription>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={onOpenImport}>
             <FileSpreadsheet className="mr-1 h-4 w-4" />
             从 Excel 导入

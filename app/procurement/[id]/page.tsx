@@ -11,6 +11,7 @@ import { ProcurementNotifyApproverButton } from "@/components/procurement-notify
 import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
 import { OrdersBackHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
+import styles from "@/components/procurement/procurement-responsive.module.css";
 import { Badge } from "@/components/ui/badge";
 import {
   CheckCircle2,
@@ -272,7 +273,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
               基本信息
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-2 sm:grid-cols-2">
+          <CardContent className="grid gap-2 [overflow-wrap:anywhere] sm:grid-cols-2">
             <p>
               <span className="text-muted-foreground">发起人：</span>
               {order.initiatorName}
@@ -310,7 +311,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Table>
+            <Table className={`${styles.cards} ${styles.readableTable}`} aria-label="采购明细" role="table">
               <TableHeader>
                 <TableRow>
                   <TableHead>物品名称</TableHead>
@@ -326,13 +327,13 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
               <TableBody>
                 {order.items.map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell>{item.name}</TableCell>
-                    <TableCell>{item.spec}</TableCell>
-                    <TableCell>
+                    <TableCell data-wide data-label="物品名称">{item.name}</TableCell>
+                    <TableCell data-wide data-label="规格">{item.spec}</TableCell>
+                    <TableCell data-label="种类">
                       {formatPurchaseItemKind(item.itemKind)}
                     </TableCell>
-                    <TableCell>{item.processingVendor || "—"}</TableCell>
-                    <TableCell>
+                    <TableCell data-label="加工商">{item.processingVendor || "—"}</TableCell>
+                    <TableCell data-wide data-label="链接/图片">
                       <PurchaseItemReferenceCell
                         itemKind={item.itemKind}
                         purchaseLink={item.purchaseLink}
@@ -340,9 +341,9 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                         referenceImagePaths={item.referenceImagePaths}
                       />
                     </TableCell>
-                    <TableCell>{item.quantity}</TableCell>
-                    <TableCell>¥{item.unitPrice.toFixed(2)}</TableCell>
-                    <TableCell>
+                    <TableCell data-label="数量">{item.quantity}</TableCell>
+                    <TableCell data-label="单价">¥{item.unitPrice.toFixed(2)}</TableCell>
+                    <TableCell data-label="小计">
                       ¥{(item.quantity * item.unitPrice).toFixed(2)}
                     </TableCell>
                   </TableRow>
