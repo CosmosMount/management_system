@@ -41,7 +41,7 @@ export function FeedbackList({
   onSelect: (feedbackId: string) => void;
 }) {
   return (
-    <Card className="flex min-h-[32rem] min-w-0 flex-col overflow-hidden lg:h-full lg:min-h-0">
+    <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <CardHeader className="shrink-0 border-b">
         <div className="flex items-center justify-between gap-3">
           <CardTitle>{isSuperAdmin ? "反馈清单" : "我的反馈"}</CardTitle>
@@ -64,7 +64,7 @@ export function FeedbackList({
           ))}
         </div>
       </CardHeader>
-      <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 [scrollbar-gutter:stable]">
+      <CardContent data-testid="feedback-list-scroll" className="min-h-0 flex-1 overflow-y-auto p-0 [scrollbar-gutter:stable]">
         {feedbacks.length === 0 ? (
           <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
             <MessageSquare className="h-8 w-8" />
@@ -79,6 +79,8 @@ export function FeedbackList({
                 <button
                   key={feedback.id}
                   type="button"
+                  data-feedback-id={feedback.id}
+                  aria-pressed={selectedFeedbackId === feedback.id}
                   className={cn(
                     "block w-full px-4 py-3 text-left transition-colors hover:bg-muted/60",
                     selectedFeedbackId === feedback.id && "bg-muted",
@@ -96,7 +98,7 @@ export function FeedbackList({
                         {formatFeedbackTime(feedback.lastMessageAt)}
                       </p>
                     </div>
-                    <Badge variant={feedbackStatusBadgeVariant(feedback.status)}>
+                    <Badge className="shrink-0" variant={feedbackStatusBadgeVariant(feedback.status)}>
                       {feedbackStatusLabels[feedback.status]}
                     </Badge>
                   </div>

@@ -40,6 +40,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import styles from "./responsive-table.module.css";
 
 type ResponsibilityCardProps = {
   responsibilities: AdminResponsibilityAssignment[];
@@ -61,7 +62,7 @@ export function TeamResponsibilitiesCard(props: ResponsibilityCardProps) {
       </CardHeader>
       <CardContent className="min-w-0">
         <div className="min-w-0">
-          <Table>
+          <Table className={styles.stacked}>
             <TableHeader>
               <TableRow>
                 <TableHead>车组</TableHead>
@@ -72,8 +73,8 @@ export function TeamResponsibilitiesCard(props: ResponsibilityCardProps) {
             <TableBody>
               {TEAM_OPTIONS.map((team) => (
                 <TableRow key={team}>
-                  <TableCell className="font-medium">{team}</TableCell>
-                  <TableCell>
+                  <TableCell data-label="车组" className="font-medium">{team}</TableCell>
+                  <TableCell data-label="报销车组组长">
                     <ResponsibilityCell
                       scope={team}
                       scopeKind="team"
@@ -85,7 +86,7 @@ export function TeamResponsibilitiesCard(props: ResponsibilityCardProps) {
                       onRemove={onRemove}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="报销员">
                     <ResponsibilityCell
                       scope={team}
                       scopeKind="team"
@@ -124,7 +125,7 @@ export function TechGroupResponsibilitiesCard(props: ResponsibilityCardProps) {
       </CardHeader>
       <CardContent className="min-w-0">
         <div className="min-w-0">
-          <Table>
+          <Table className={styles.stacked}>
             <TableHeader>
               <TableRow>
                 <TableHead>技术组</TableHead>
@@ -135,8 +136,8 @@ export function TechGroupResponsibilitiesCard(props: ResponsibilityCardProps) {
             <TableBody>
               {TECH_GROUP_OPTIONS.map((techGroup) => (
                 <TableRow key={techGroup}>
-                  <TableCell className="font-medium">{techGroup}</TableCell>
-                  <TableCell>
+                  <TableCell data-label="技术组" className="font-medium">{techGroup}</TableCell>
+                  <TableCell data-label="报销技术组组长">
                     <ResponsibilityCell
                       scope={techGroup}
                       scopeKind="techGroup"
@@ -148,7 +149,7 @@ export function TechGroupResponsibilitiesCard(props: ResponsibilityCardProps) {
                       onRemove={onRemove}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="指导老师">
                     <ResponsibilityCell
                       scope={techGroup}
                       scopeKind="techGroup"

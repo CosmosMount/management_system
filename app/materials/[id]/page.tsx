@@ -141,7 +141,7 @@ export default async function MaterialDetailPage({
                     aria-hidden="true"
                   />
                   <p className="text-sm text-muted-foreground">
-                    {material.deletedAt ? "物资已删除，二维码已停用。" : "当前无人使用，登录用户扫描右侧二维码后可确认领用。"}
+                    {material.deletedAt ? "物资已删除，二维码已停用。" : "当前无人使用，登录用户扫描此物资的专属二维码后可确认领用。"}
                   </p>
                 </div>
               )}
