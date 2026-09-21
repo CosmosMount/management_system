@@ -11,7 +11,7 @@ import {
 import { createAccountPerson, grantRole } from "./helpers/project-management-ui-fixtures";
 
 test.describe("project management S3 shell", { tag: "@smoke" }, () => {
-  test("窄窗口仍使用完整侧栏、导航和时间线", async ({ context, page, baseURL }) => {
+  test("窄窗口通过抽屉访问完整导航并保留时间线", async ({ context, page, baseURL }) => {
     const fixture = await createShellFixture();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -23,16 +23,22 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto("/progress");
       const sidebar = page.getByTestId("project-management-sidebar");
-      await expect(sidebar).toBeVisible();
-      await expect(sidebar.getByRole("link", { name: "会议", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "个人中心", exact: true }).first()).toBeVisible();
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-      await page.getByRole("button", { name: "折叠项目管理导航" }).click();
-      await expect(sidebar).toHaveCSS("width", "64px");
-      await page.getByRole("button", { name: "展开项目管理导航" }).focus();
-      await page.getByRole("button", { name: "展开项目管理导航" }).press("Enter");
-      await expect(sidebar).toHaveCSS("width", "224px");
-      await sidebar.getByRole("link", { name: "会议", exact: true }).click();
+      if (width >= 1024) {
+        await expect(sidebar).toBeVisible();
+        await expect(sidebar.getByRole("link", { name: "会议", exact: true })).toBeVisible();
+        await expect(page.getByRole("link", { name: "个人中心", exact: true }).first()).toBeVisible();
+        await page.getByRole("button", { name: "折叠项目管理导航" }).click();
+        await expect(sidebar).toHaveCSS("width", "64px");
+        await page.getByRole("button", { name: "展开项目管理导航" }).focus();
+        await page.getByRole("button", { name: "展开项目管理导航" }).press("Enter");
+        await expect(sidebar).toHaveCSS("width", "224px");
+        await sidebar.getByRole("link", { name: "会议", exact: true }).click();
+      } else {
+        await expect(sidebar).toBeHidden();
+        await page.getByRole("button", { name: "打开项目管理导航" }).click();
+        await page.getByRole("dialog", { name: "项目管理导航", exact: true }).getByRole("link", { name: "会议", exact: true }).click();
+      }
       await expect(page).toHaveURL(/\/progress\/meetings(?:\?|$)/);
       await expectHealthyPage(page);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);

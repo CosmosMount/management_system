@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { NavigationDrawer } from "@/components/navigation-drawer";
 
 export type ManagementNavigationItem = {
   href: string;
@@ -41,13 +42,13 @@ export function ManagementShell({
 
   return (
     <div
-      className="flex min-h-[calc(100dvh-3.5rem)] w-full min-w-0 max-w-full overflow-x-clip"
+      className="flex min-h-[calc(100dvh-3.5rem)] w-full min-w-0 max-w-full flex-col lg:flex-row"
       data-testid={`${testIdPrefix}-shell`}
     >
       <aside
         aria-label={`${title}侧栏`}
         className={cn(
-          "pm-shell-motion sticky top-14 flex h-[calc(100dvh-3.5rem)] shrink-0 flex-col border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] transition-[width] duration-150",
+          "pm-shell-motion sticky top-14 hidden h-[calc(100dvh-3.5rem)] shrink-0 flex-col border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] transition-[width] duration-150 lg:flex",
           collapsed ? "w-16" : "w-56",
         )}
         data-state={collapsed ? "collapsed" : "expanded"}
@@ -95,8 +96,16 @@ export function ManagementShell({
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-x-auto">
-        <main className="min-w-[64rem] flex-1" id={`${testIdPrefix}-content`}>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 items-center justify-between border-b bg-card px-2 lg:hidden">
+          <NavigationDrawer title={`${title}导航`} triggerLabel={`打开${title}导航`}>
+            <ManagementNavigation title={title} pathname={pathname} navigationItems={navigationItems} />
+          </NavigationDrawer>
+          <span className="min-w-0 truncate pr-2 text-xs text-muted-foreground">
+            {navigationItems.find((item) => item.match(pathname))?.label}
+          </span>
+        </div>
+        <main className="w-full min-w-0 flex-1" id={`${testIdPrefix}-content`}>
           {children}
         </main>
       </div>
@@ -144,7 +153,7 @@ function ManagementNavigation({
             aria-current={active ? "page" : undefined}
             aria-label={accessibleLabel}
             className={cn(
-              "group relative flex h-10 min-w-0 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-[var(--pm-nav-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-[var(--pm-focus-ring)] motion-reduce:transition-none",
+              "group relative flex min-h-11 min-w-0 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-[var(--pm-nav-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-[var(--pm-focus-ring)] motion-reduce:transition-none",
               active &&
                 "bg-[var(--pm-nav-active-bg)] text-[var(--pm-nav-active-foreground)]",
               collapsed && "justify-center px-0",

@@ -212,14 +212,14 @@ export function AsyncCombobox<TOption extends PickerOption>({
           {clearable && value && !disabled && (
             <Combobox.Clear
               aria-label={`清空${ariaLabel}`}
-              className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:size-11"
             >
               <X className="size-4" />
             </Combobox.Clear>
           )}
           <Combobox.Trigger
             aria-label={`展开${ariaLabel}`}
-            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:size-11"
           >
             <ChevronDown className="size-4" />
           </Combobox.Trigger>
@@ -388,7 +388,7 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
                         </span>
                         <Combobox.ChipRemove
                           aria-label={`移除${label}`}
-                          className="flex size-5 shrink-0 items-center justify-center rounded-sm hover:bg-background focus-visible:outline-none"
+                          className="flex size-5 shrink-0 items-center justify-center rounded-sm hover:bg-background focus-visible:outline-none [@media(pointer:coarse)]:size-11"
                         >
                           <X className="size-3.5" />
                         </Combobox.ChipRemove>
@@ -414,14 +414,14 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
           {clearable && value.length > 0 && !disabled && (
             <Combobox.Clear
               aria-label={`清空${ariaLabel}`}
-              className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:size-11"
             >
               <X className="size-4" />
             </Combobox.Clear>
           )}
           <Combobox.Trigger
             aria-label={`展开${ariaLabel}`}
-            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:size-11"
           >
             <ChevronDown className="size-4" />
           </Combobox.Trigger>

@@ -30,14 +30,14 @@ export function NavCard({
       <Link href={href} className="group block w-full">
         <Card
           className={cn(
-            "flex min-h-[7rem] w-full flex-row items-center gap-6 border-border/60 bg-card/80 p-6 shadow-sm backdrop-blur-sm transition-all hover:border-primary/30 hover:shadow-md",
+            "flex min-h-[7rem] w-full min-w-0 flex-row items-center gap-4 border-border/60 bg-card/80 p-4 shadow-sm backdrop-blur-sm transition-all hover:border-primary/30 hover:shadow-md sm:gap-6 sm:p-6",
             className,
           )}
         >
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
             <Icon className="h-7 w-7" />
           </div>
-          <CardHeader className="flex-1 gap-1 p-0">
+          <CardHeader className="min-w-0 flex-1 gap-1 p-0 [overflow-wrap:anywhere]">
             <CardTitle className="text-xl">{title}</CardTitle>
             <CardDescription className="text-base">{description}</CardDescription>
           </CardHeader>
