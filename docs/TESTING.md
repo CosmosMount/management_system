@@ -10,7 +10,20 @@
 
 本文档同时定义全功能回归范围；页面 smoke 只覆盖主要入口和少量浅交互，不能等同于全功能通过。完整结论必须覆盖下述静态、业务闭环、并发和迁移层级。
 
-浏览器测试统一使用 `desktop` project。窄窗口检查在同一测试中调整窗口宽度，不切换组件、权限或功能：侧栏与完整表格仍显示，内容可在所属容器滚动访问，时间线保留缩放、范围操作及通用表单。`project-management-s3-shell.spec.ts` 覆盖窄窗口导航与会议入口，`functional-panels.spec.ts` 覆盖职责和账号表格，`project-management-ui-routes-responsive.spec.ts` 覆盖投入创建范围操作与网络失败重试；仍须通过官方 runner 使用隔离数据库和通知禁发保护。
+浏览器测试统一使用 `desktop` project。窄窗口检查在同一测试中调整窗口宽度，沿用同一权限和业务功能；窄屏导航使用抽屉，普通表格可重排为字段卡片，比较型表格和画布保持局部滚动。`project-management-s3-shell.spec.ts` 覆盖窄窗口导航与会议入口，`functional-panels.spec.ts` 覆盖职责和账号表格，`project-management-ui-routes-responsive.spec.ts` 覆盖投入创建范围操作与网络失败重试；仍须通过官方 runner 使用隔离数据库和通知禁发保护。
+
+## 手机界面与视觉审查
+
+定向入口：`npm run test:e2e -- tests/mobile-shell.spec.ts tests/mobile-procurement.spec.ts tests/mobile-project-management.spec.ts tests/mobile-auxiliary.spec.ts`。覆盖桌面 1440×1000、393×851 和 360px 窄屏，以及共享导航的 768/1024px 断点两侧。真实触摸事件在官方 runner 内创建的触摸上下文中执行，不另开不受控数据库或浏览器测试入口。
+
+- 壳层：完整导航、角色入口、同路径查询切换、抽屉关闭/焦点、旋转后状态和主内容实际宽度。
+- 采购：长明细及完整操作、Excel 错误弹层、同一表单/文件跨宽度保留、草稿持久化、报销校验和 BOM 下载。
+- 项目：列表/详情/审批/会议/通知截图、Composer 节点勾选/批量移动/边界/撤销、触摸滑动不写业务数据、投入编辑保存。
+- 其他：反馈各会话草稿/图片/返回与创建回复、物资登记/二维码下载/领用/照片归还、管理员角色和历史/拒绝访问、签名上传。
+
+用例通过 `testInfo.outputPath` 保存截图，关闭截图时的动画，布局截图先回到页面顶部。人工逐张查看手机与桌面截图，记录发现、修正和复查，不能只用“无页面横向溢出”代替视觉审查。截图、trace、cookie 和报告仍只保存在被忽略的产物目录。完整验收还需 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`。
+
+真机 OAuth、软键盘、相册、文件下载、剪贴板与 Web Serial 能力需另在对应设备/浏览器实际检查；自动化结果不声称完成真机认证。实施进度与本轮证据见 [手机界面实施清单](MOBILE_INTERFACE_PLAN.md)。
 
 ## 全功能回归分层
 
