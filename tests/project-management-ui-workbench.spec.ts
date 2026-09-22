@@ -115,6 +115,95 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }
     });
 
+  test("approval reminder uses searchable multi-select recipients", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
+    const fixture = await createUiFixture();
+    const secondAdministrator = await createAccountPerson(
+      `P6 审批催促第二管理员 ${randomUUID()}`,
+    );
+    await grantRole(secondAdministrator.account.id, "PROJECT_ADMINISTRATOR");
+    const submitted = await submitMilestoneForReview(actor(fixture.owner), {
+      milestoneNodeId: fixture.activeNodeId,
+      idempotencyKey: `p6-approval-urge-ui-${randomUUID()}`,
+      evidences: [],
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+
+    for (const width of [1_440, 390]) {
+      await page.setViewportSize({ width, height: 1_000 });
+      const gate = page.getByTestId("task-approval-gate");
+      await expect(gate).toBeVisible();
+      await gate.getByRole("button", { name: "催促审批", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      await expect(
+        dialog.getByLabel(`移除${secondAdministrator.person.displayName}`, {
+          exact: true,
+        }),
+      ).toBeVisible();
+
+      await dialog.getByLabel("清空审批催促提醒对象", { exact: true }).click();
+      const recipientInput = dialog.getByLabel("审批催促提醒对象", { exact: true });
+      await recipientInput.fill(fixture.admin.person.displayName);
+      await expect(
+        page.getByRole("option", {
+          name: fixture.admin.person.displayName,
+          exact: true,
+        }),
+      ).toBeVisible();
+      await page
+        .getByRole("option", {
+          name: fixture.admin.person.displayName,
+          exact: true,
+        })
+        .click();
+      await dialog.getByRole("button", { name: "发送催促", exact: true }).click();
+      await expect(dialog).not.toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+        ),
+      ).toBe(true);
+    }
+
+    await expect
+      .poll(() =>
+        prisma.inAppNotification.findMany({
+          where: {
+            entityId: submitted.reviewId,
+            eventKey: { startsWith: "pm:approval:urge:" },
+          },
+          select: { recipientAccountId: true },
+          orderBy: { createdAt: "asc" },
+        }),
+      )
+      .toHaveLength(2);
+    const notifications = await prisma.inAppNotification.findMany({
+      where: {
+        entityId: submitted.reviewId,
+        eventKey: { startsWith: "pm:approval:urge:" },
+      },
+      select: { recipientAccountId: true },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(notifications).toEqual([
+      { recipientAccountId: fixture.admin.account.id },
+      { recipientAccountId: fixture.admin.account.id },
+    ]);
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
+
   test("Revision nodes toggle cached read-only base-plan rows in the Task timeline", async ({
     context,
     page,

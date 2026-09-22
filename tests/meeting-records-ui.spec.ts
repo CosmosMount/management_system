@@ -104,11 +104,20 @@ test("参会者可选择未填写人员并发送会议提醒", async ({ page, co
     await page.setViewportSize({ width, height: 1000 });
     await page.getByRole("button", { name: "提醒填写投入", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByRole("checkbox")).toBeChecked();
+    await expect(
+      dialog.getByLabel(`移除${participant.person.displayName}`, { exact: true }),
+    ).toBeVisible();
     await expect(dialog).toContainText(meeting.topic);
     await dialog.getByRole("button", { name: "清空", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "发送提醒", exact: true })).toBeDisabled();
-    await dialog.getByRole("button", { name: "选择未填写人员", exact: true }).click();
+    const recipientInput = dialog.getByLabel("会议投入提醒对象", { exact: true });
+    await recipientInput.fill(participant.person.displayName);
+    await expect(
+      page.getByRole("option", { name: participant.person.displayName, exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("option", { name: participant.person.displayName, exact: true })
+      .click();
     await dialog.getByRole("button", { name: "发送提醒", exact: true }).click();
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole("status").filter({ hasText: "已为 1 人创建站内通知" })).toBeVisible();
