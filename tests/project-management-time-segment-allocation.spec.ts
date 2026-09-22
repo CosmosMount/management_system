@@ -38,7 +38,37 @@ test.describe("time segment allocation UI", () => {
     const canvasRoot = page.getByTestId("time-canvas-root");
     await expect(canvasRoot).toBeVisible();
     await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
-    await expect(page.getByTestId("time-canvas-bottom-scrollbar")).toBeVisible();
+    const canvasScroll = page.getByTestId("time-canvas-scroll");
+    const bottomScrollbar = page.getByTestId("time-canvas-bottom-scrollbar");
+    await expect(bottomScrollbar).toBeVisible();
+    await expect.poll(() => canvasScroll.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    const scrollbarGeometry = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>("[data-testid='time-canvas-scroll-shell']");
+      const canvas = document.querySelector<HTMLElement>("[data-testid='time-canvas-scroll']");
+      const scrollbar = document.querySelector<HTMLElement>("[data-testid='time-canvas-bottom-scrollbar']");
+      if (!shell || !canvas || !scrollbar) return null;
+      const shellBox = shell.getBoundingClientRect();
+      const canvasBox = canvas.getBoundingClientRect();
+      const scrollbarBox = scrollbar.getBoundingClientRect();
+      return {
+        canvasBottom: canvasBox.bottom,
+        scrollbarTop: scrollbarBox.top,
+        scrollbarBottom: scrollbarBox.bottom,
+        shellBottom: shellBox.bottom,
+      };
+    });
+    expect(scrollbarGeometry).not.toBeNull();
+    expect(Math.abs(scrollbarGeometry!.shellBottom - scrollbarGeometry!.scrollbarBottom)).toBeLessThanOrEqual(1);
+    expect(scrollbarGeometry!.scrollbarTop).toBeLessThan(scrollbarGeometry!.canvasBottom);
+    expect(scrollbarGeometry!.scrollbarBottom).toBeGreaterThanOrEqual(scrollbarGeometry!.canvasBottom - 1);
+
+    const mainScrollTarget = await canvasScroll.evaluate((element) => Math.floor((element.scrollWidth - element.clientWidth) / 2));
+    await canvasScroll.evaluate((element, left) => { element.scrollLeft = left; }, mainScrollTarget);
+    await expect.poll(() => bottomScrollbar.locator("[aria-label='时间轴横向滚动']").evaluate((element) => element.scrollLeft)).toBe(mainScrollTarget);
+    const customScrollbar = bottomScrollbar.locator("[aria-label='时间轴横向滚动']");
+    const customScrollTarget = await customScrollbar.evaluate((element) => Math.max(0, element.scrollWidth - element.clientWidth));
+    await customScrollbar.evaluate((element, left) => { element.scrollLeft = left; }, customScrollTarget);
+    await expect.poll(() => canvasScroll.evaluate((element) => element.scrollLeft)).toBe(customScrollTarget);
     for (const scale of ["周", "月", "季", "年"]) {
       await expect(page.getByRole("button", { name: scale, exact: true })).toBeVisible();
     }
