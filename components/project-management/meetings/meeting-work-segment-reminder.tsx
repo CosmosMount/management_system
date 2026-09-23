@@ -36,6 +36,7 @@ export function MeetingWorkSegmentReminder({ meetingId }: { meetingId: string })
       (data?.participants ?? []).map((person) => ({
         id: person.id,
         displayName: person.displayName,
+        avatar: person.avatar,
         description: person.missing ? "未填写" : "已填写",
         disabled: !person.eligible,
         disabledReason: !person.eligible

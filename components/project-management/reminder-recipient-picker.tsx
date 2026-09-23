@@ -2,11 +2,13 @@
 
 import { useCallback, useMemo } from "react";
 import { AsyncMultiCombobox } from "@/components/entity-picker/async-combobox";
+import { PersonAvatar } from "@/components/project-management/person-avatar";
 import type { PickerPage, PickerOption } from "@/components/entity-picker/picker-types";
 import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
 
 export type ReminderRecipientOption = PickerOption & {
   displayName: string;
+  avatar?: string | null;
   description?: string;
 };
 
@@ -95,6 +97,7 @@ export function ReminderRecipientPicker({
         getOptionLabel={(option) => option.displayName}
         getOptionDescription={getRecipientDescription}
         renderOption={(option) => <RecipientOptionContent option={option} />}
+        renderSelected={(option) => <RecipientSelectedContent option={option} />}
       />
     </div>
   );
@@ -108,9 +111,7 @@ function RecipientOptionContent({ option }: { option: ReminderRecipientOption })
   const description = getRecipientDescription(option);
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-        {option.displayName.slice(0, 1)}
-      </span>
+      <PersonAvatar option={option} />
       <span className="min-w-0">
         <span className="block truncate font-medium">{option.displayName}</span>
         {description && (
@@ -120,5 +121,18 @@ function RecipientOptionContent({ option }: { option: ReminderRecipientOption })
         )}
       </span>
     </div>
+  );
+}
+
+function RecipientSelectedContent({
+  option,
+}: {
+  option: ReminderRecipientOption;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <PersonAvatar option={option} size="small" />
+      <span className="min-w-0 truncate">{option.displayName}</span>
+    </span>
   );
 }

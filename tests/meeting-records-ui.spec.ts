@@ -95,8 +95,31 @@ test("参会者可选择未填写人员并发送会议提醒", async ({ page, co
   const admin = await createAccountPerson(`提醒管理员 ${randomUUID()}`);
   const participant = await createAccountPerson(`提醒参会者 ${randomUUID()}`);
   await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
-  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "投入填写提醒测试", personIds: [participant.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
-  await loginAsTestUser(context, baseURL, { openId: participant.openId, name: participant.person.displayName });
+  const avatarPath = "/meeting-reminder-person-avatar.svg";
+  const avatarSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="16" fill="#7c3aed"/></svg>';
+  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "投入填写提醒测试", personIds: [admin.person.id, participant.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
+  await createSegment({
+    accountId: admin.account.id,
+    personId: admin.person.id,
+    startAt: atHour(9),
+    endAt: atHour(10),
+    content: "提醒测试管理员已有投入",
+  });
+  await page.route(`**${avatarPath}*`, (route) =>
+    route.fulfill({ contentType: "image/svg+xml", body: avatarSvg }),
+  );
+  await page.route("**/_next/image**", (route) => {
+    const source = new URL(route.request().url()).searchParams.get("url");
+    return source === avatarPath
+      ? route.fulfill({ contentType: "image/svg+xml", body: avatarSvg })
+      : route.continue();
+  });
+  await loginAsTestUser(context, baseURL, { openId: admin.openId, name: admin.person.displayName });
+  await prisma.person.update({
+    where: { id: participant.person.id },
+    data: { avatar: avatarPath },
+  });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`/progress/meetings/${meeting.id}`);
@@ -107,17 +130,19 @@ test("参会者可选择未填写人员并发送会议提醒", async ({ page, co
     await expect(
       dialog.getByLabel(`移除${participant.person.displayName}`, { exact: true }),
     ).toBeVisible();
+    const selectedAvatar = dialog.getByTestId("person-picker-avatar");
+    await expect(selectedAvatar).toHaveCount(1);
+    await expect(selectedAvatar).toHaveAttribute("src", /meeting-reminder-person-avatar\.svg/);
     await expect(dialog).toContainText(meeting.topic);
     await dialog.getByRole("button", { name: "清空", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "发送提醒", exact: true })).toBeDisabled();
     const recipientInput = dialog.getByLabel("会议投入提醒对象", { exact: true });
     await recipientInput.fill(participant.person.displayName);
-    await expect(
-      page.getByRole("option", { name: participant.person.displayName, exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("option", { name: participant.person.displayName, exact: true })
-      .click();
+    const option = page.getByRole("option", { name: participant.person.displayName, exact: true });
+    await expect(option).toBeVisible();
+    await expect(option.getByTestId("person-picker-avatar")).toHaveAttribute("src", /meeting-reminder-person-avatar\.svg/);
+    await option.click();
+    await expect(dialog.getByTestId("person-picker-avatar")).toHaveCount(1);
     await dialog.getByRole("button", { name: "发送提醒", exact: true }).click();
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole("status").filter({ hasText: "已为 1 人创建站内通知" })).toBeVisible();
@@ -126,6 +151,60 @@ test("参会者可选择未填写人员并发送会议提醒", async ({ page, co
   expect(await prisma.inAppNotification.count({ where: { entityId: meeting.id } })).toBe(2);
   await expectHealthyPage(page);
   expect(errors).toEqual([]);
+});
+
+test("共享人员选择器在候选项和已选标签显示头像", async ({ page, context, baseURL }) => {
+  if (!baseURL) throw new Error("人员选择器测试缺少隔离服务地址");
+  const admin = await createAccountPerson(`头像选择器超管 ${randomUUID()}`);
+  const member = await createAccountPerson(`头像选择器人员 ${randomUUID()}`);
+  await prisma.systemRoleAssignment.create({
+    data: {
+      accountId: admin.account.id,
+      role: "SUPER_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+    },
+  });
+  const avatarPath = "/meeting-person-picker-avatar.svg";
+  await prisma.person.update({
+    where: { id: member.person.id },
+    data: { avatar: avatarPath },
+  });
+  const avatarSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="16" fill="#059669"/></svg>';
+  await page.route(`**${avatarPath}*`, (route) =>
+    route.fulfill({ contentType: "image/svg+xml", body: avatarSvg }),
+  );
+  await page.route("**/_next/image**", (route) => {
+    const source = new URL(route.request().url()).searchParams.get("url");
+    return source === avatarPath
+      ? route.fulfill({ contentType: "image/svg+xml", body: avatarSvg })
+      : route.continue();
+  });
+  await loginAsTestUser(context, baseURL, {
+    openId: admin.openId,
+    name: admin.person.displayName,
+  });
+  await page.goto("/progress/meetings/new");
+  await page.getByRole("button", { name: "创建会议记录", exact: true }).click();
+  const picker = page.getByRole("combobox", {
+    name: "会议参与人",
+    exact: true,
+  });
+  await picker.fill(member.person.displayName);
+  const option = page.getByRole("option", {
+    name: member.person.displayName,
+    exact: true,
+  });
+  await expect(option.getByTestId("person-picker-avatar")).toBeVisible();
+  await expect(option.getByTestId("person-picker-avatar")).toHaveAttribute("src", /meeting-person-picker-avatar\.svg/);
+  await option.click();
+  const selectedAvatar = page.getByTestId("person-picker-avatar");
+  await expect(selectedAvatar).toHaveCount(1);
+  await expect(selectedAvatar).toHaveAttribute("src", /meeting-person-picker-avatar\.svg/);
+  await page.setViewportSize({ width: 393, height: 851 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expectHealthyPage(page);
 });
 
 test("会议时间线项目名称只展示一次并保留独立任务链接", async ({ page, context, baseURL }) => {

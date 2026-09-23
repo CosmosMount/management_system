@@ -11,7 +11,7 @@ import { meetingUrgeInputSchema, meetingUrgeQuerySchema } from "@/lib/project-ma
 
 async function loadMeeting(tx: Prisma.TransactionClient, actor: ProjectManagementActor, meetingId: string) {
   const meeting = await tx.meetingRecord.findUnique({ where: { id: meetingId }, include: {
-    participants: { select: { person: { select: { id: true, displayName: true, status: true, accountId: true } } }, orderBy: { personId: "asc" } },
+    participants: { select: { person: { select: { id: true, displayName: true, avatar: true, status: true, accountId: true } } }, orderBy: { personId: "asc" } },
   } });
   if (!meeting) throw notFoundError();
   if (!actor.isActive || !meeting.participants.some(({ person }) => person.id === actor.personId)) {
@@ -34,7 +34,7 @@ export async function listMeetingMissingPeople(actor: ProjectManagementActor, in
       meetingId: meeting.id, topic: meeting.topic, version: meeting.version,
       rangeStart: meeting.rangeStart.toISOString(), rangeEnd: meeting.rangeEnd.toISOString(),
       participants: meeting.participants.map(({ person }) => ({
-        id: person.id, displayName: person.displayName, missing: !filledIds.has(person.id),
+        id: person.id, displayName: person.displayName, avatar: person.avatar, missing: !filledIds.has(person.id),
         eligible: person.status === "ACTIVE" && Boolean(person.accountId),
       })),
     };

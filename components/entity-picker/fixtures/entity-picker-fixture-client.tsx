@@ -28,16 +28,86 @@ const LIMIT_OPTIONS: FixtureOption[] = Array.from({ length: 51 }, (_, index) => 
   id: `limit-${index + 1}`,
   label: `上限选项 ${String(index + 1).padStart(2, "0")}`,
 }));
+const AVATAR_OPTIONS: FixtureOption[] = [
+  { id: "avatar-a", label: "头像人员 A" },
+  { id: "avatar-b", label: "头像人员 B" },
+];
 
 export function EntityPickerFixtureClient() {
   return (
     <main className="mx-auto grid w-full min-w-0 max-w-4xl gap-8 px-4 py-8 sm:px-6">
       <RaceAndRetryFixture />
       <KeyboardFocusFixture />
+      <SelectedAdornmentFixture />
       <ResolverFixture />
       <LimitFixture />
       <FormFixture />
     </main>
+  );
+}
+
+function SelectedAdornmentFixture() {
+  const [singleValue, setSingleValue] = useState<string | null>("avatar-a");
+  const [multiValue, setMultiValue] = useState<string[]>(["avatar-a"]);
+  const loadOptions = useCallback<PickerLoadOptions<FixtureOption>>(
+    async ({ query }) =>
+      page(
+        AVATAR_OPTIONS.filter((option) =>
+          option.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+        ),
+      ),
+    [],
+  );
+  const resolveOptions = useCallback<PickerResolveOptions<FixtureOption>>(
+    async (ids) => AVATAR_OPTIONS.filter((option) => ids.includes(option.id)),
+    [],
+  );
+
+  return (
+    <FixtureSection title="选中项头像扩展">
+      <AsyncCombobox
+        ariaLabel="头像单选选择器"
+        value={singleValue}
+        onValueChange={setSingleValue}
+        initialOptions={AVATAR_OPTIONS}
+        loadOptions={loadOptions}
+        resolveOptions={resolveOptions}
+        scopeKey="fixture-selected-adornment-single"
+        getOptionLabel={(option) => option.label}
+        renderOption={(option) => (
+          <span className="flex items-center gap-2">
+            <span aria-hidden="true" data-testid="fixture-option-avatar">
+              ●
+            </span>
+            {option.label}
+          </span>
+        )}
+        renderSelectedAdornment={(option) => (
+          <span aria-hidden="true" data-testid="fixture-single-selected-avatar">
+            {option.label.slice(-1)}
+          </span>
+        )}
+      />
+      <AsyncMultiCombobox
+        ariaLabel="头像多选选择器"
+        value={multiValue}
+        onValueChange={setMultiValue}
+        initialOptions={AVATAR_OPTIONS}
+        loadOptions={loadOptions}
+        resolveOptions={resolveOptions}
+        scopeKey="fixture-selected-adornment-multi"
+        getOptionLabel={(option) => option.label}
+        renderOption={(option) => option.label}
+        renderSelected={(option) => (
+          <span className="flex items-center gap-1">
+            <span aria-hidden="true" data-testid="fixture-multi-selected-avatar">
+              ●
+            </span>
+            <span>{option.label}</span>
+          </span>
+        )}
+      />
+    </FixtureSection>
   );
 }
 

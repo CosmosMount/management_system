@@ -127,6 +127,13 @@ test.describe("project management UI project-management-ui-workbench", () => {
       `P6 审批催促第二管理员 ${randomUUID()}`,
     );
     await grantRole(secondAdministrator.account.id, "PROJECT_ADMINISTRATOR");
+    const avatarPath = "/approval-urge-person-avatar.svg";
+    const avatarSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="16" fill="#ea580c"/></svg>';
+    await prisma.person.update({
+      where: { id: fixture.admin.person.id },
+      data: { avatar: avatarPath },
+    });
     const submitted = await submitMilestoneForReview(actor(fixture.owner), {
       milestoneNodeId: fixture.activeNodeId,
       idempotencyKey: `p6-approval-urge-ui-${randomUUID()}`,
@@ -137,6 +144,9 @@ test.describe("project management UI project-management-ui-workbench", () => {
       openId: fixture.owner.openId,
       name: fixture.owner.person.displayName,
     });
+    await page.route(`**${avatarPath}*`, (route) =>
+      route.fulfill({ contentType: "image/svg+xml", body: avatarSvg }),
+    );
     await page.goto(`/progress/tasks/${fixture.taskId}`);
 
     for (const width of [1_440, 390]) {
@@ -155,18 +165,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await dialog.getByLabel("清空审批催促提醒对象", { exact: true }).click();
       const recipientInput = dialog.getByLabel("审批催促提醒对象", { exact: true });
       await recipientInput.fill(fixture.admin.person.displayName);
-      await expect(
-        page.getByRole("option", {
-          name: fixture.admin.person.displayName,
-          exact: true,
-        }),
-      ).toBeVisible();
-      await page
-        .getByRole("option", {
-          name: fixture.admin.person.displayName,
-          exact: true,
-        })
-        .click();
+      const option = page.getByRole("option", {
+        name: fixture.admin.person.displayName,
+        exact: true,
+      });
+      await expect(option).toBeVisible();
+      await expect(option.getByTestId("person-picker-avatar")).toHaveAttribute("src", /approval-urge-person-avatar\.svg/);
+      await option.click();
+      await expect(dialog.getByTestId("person-picker-avatar")).toHaveCount(1);
       await dialog.getByRole("button", { name: "发送催促", exact: true }).click();
       await expect(dialog).not.toBeVisible();
       expect(

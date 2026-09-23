@@ -43,6 +43,7 @@ export function ApprovalUrgeButton({
       targets.map((target) => ({
         id: target.accountId,
         displayName: target.displayName,
+        avatar: target.avatar,
         description: "审批管理员",
       })),
     [targets],
