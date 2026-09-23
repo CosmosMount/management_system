@@ -163,7 +163,7 @@ export const TimeCanvasBottomScrollbar = forwardRef<
   if (hidden) return null;
   return (
     <div
-      className="sticky bottom-0 z-40 grid h-4 border-t border-border bg-background"
+      className="absolute inset-x-0 bottom-0 z-40 grid h-4 border-t border-border bg-background"
       style={{ gridTemplateColumns: `${rowHeaderWidth}px minmax(0,1fr)` }}
       data-testid="time-canvas-bottom-scrollbar"
     >

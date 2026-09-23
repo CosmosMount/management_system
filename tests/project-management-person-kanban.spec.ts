@@ -111,6 +111,18 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
 
     const fixture = await createUiFixture();
     const longPersonName = `看板超长人员名称${"甲乙丙丁".repeat(24)}${fixture.member.person.id}`;
+    const avatarPath = "/person-picker-avatar-good.svg";
+    const avatarSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="16" fill="#2563eb"/></svg>';
+    await page.route(`**${avatarPath}*`, (route) =>
+      route.fulfill({ contentType: "image/svg+xml", body: avatarSvg }),
+    );
+    await page.route("**/_next/image**", (route) => {
+      const source = new URL(route.request().url()).searchParams.get("url");
+      return source === avatarPath
+        ? route.fulfill({ contentType: "image/svg+xml", body: avatarSvg })
+        : route.continue();
+    });
     await prisma.person.update({
       where: { id: fixture.member.person.id },
       data: { displayName: longPersonName },
@@ -119,6 +131,10 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     await loginAsTestUser(context, baseURL, {
       openId: fixture.outsider.openId,
       name: fixture.outsider.person.displayName,
+    });
+    await prisma.person.update({
+      where: { id: fixture.member.person.id },
+      data: { avatar: avatarPath },
     });
 
     await page.goto(
@@ -130,6 +146,10 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
       "data-zoom",
       "MONTH",
     );
+    const selectedAvatar = page.getByTestId("person-picker-avatar");
+    await expect(selectedAvatar).toHaveCount(1);
+    await expect(selectedAvatar).not.toHaveAttribute("src", /./);
+    await expect(selectedAvatar).toHaveText("P");
     await expect
       .poll(() => new URL(page.url()).searchParams.get("center"))
       .not.toBeNull();
@@ -165,6 +185,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
       .poll(() => new URL(page.url()).searchParams.get("center"))
       .toBe(centerBeforeSelection);
     await expect(page.getByText(`当前查看：${longPersonName}。`)).toBeVisible();
+    await expect(selectedAvatar).toHaveAttribute("src", /person-picker-avatar-good\.svg/);
     await expect(
       page.getByTestId(`timeline-row-person:${fixture.member.person.id}`),
     ).toBeVisible();

@@ -325,7 +325,11 @@ export function AnchorMarker({
     rowBottom: number;
   } | null>(null);
   const [previewAtMs, setPreviewAtMs] = useState<number | null>(null);
-  const previewBlockedMessageRef = useRef<string | null>(null);
+  const pointerPreviewRef = useRef<{
+    atMs: number;
+    requestedDeltaMs: number;
+    blockedMessage: string | null;
+  } | null>(null);
   const suppressClickRef = useRef(false);
   const displayedAtMs = previewAtMs ?? groupPreviewAtMs ?? anchor.atMs;
   const completed = anchor.completed ?? anchor.status === "COMPLETED";
@@ -478,7 +482,7 @@ export function AnchorMarker({
           rowBottom: rowRect?.bottom ?? Number.POSITIVE_INFINITY,
         });
         setPreviewAtMs(anchor.atMs);
-        previewBlockedMessageRef.current = null;
+        pointerPreviewRef.current = null;
         onPreviewChange(
           anchor.id,
           anchor.atMs,
@@ -497,7 +501,11 @@ export function AnchorMarker({
         const canvasResult = moveAnchorGroupOnCanvas({ rawDeltaMs: rawDelta });
         const result = constrainMove(canvasResult, "MOVE");
         setPreviewAtMs(result.atMs);
-        previewBlockedMessageRef.current = result.blockedMessage ?? null;
+        pointerPreviewRef.current = {
+          atMs: result.atMs,
+          requestedDeltaMs: snapTime(rawDelta, scale.anchorSnapMs, "round", 0),
+          blockedMessage: result.blockedMessage ?? null,
+        };
         onPreviewChange(
           anchor.id,
           result.atMs,
@@ -510,19 +518,21 @@ export function AnchorMarker({
       onPointerCancel={() => {
         setMove(null);
         setPreviewAtMs(null);
-        previewBlockedMessageRef.current = null;
+        pointerPreviewRef.current = null;
         onPreviewChange(anchor.id, null, []);
       }}
       onPointerUp={(event) => {
         if (!move || move.pointerId !== event.pointerId) return;
-        const result = previewAtMs;
-        const blockedMessage = previewBlockedMessageRef.current;
-        const attemptedMove = suppressClickRef.current;
+        const pointerPreview = pointerPreviewRef.current;
+        const result = pointerPreview?.atMs ?? previewAtMs;
+        const blockedMessage = pointerPreview?.blockedMessage;
+        const finalDropAttemptedMove =
+          pointerPreview !== null && pointerPreview.requestedDeltaMs !== 0;
         const droppedOutsideOriginalRow =
           event.clientY < move.rowTop || event.clientY >= move.rowBottom;
         setMove(null);
         setPreviewAtMs(null);
-        previewBlockedMessageRef.current = null;
+        pointerPreviewRef.current = null;
         onPreviewChange(anchor.id, null, []);
         if (suppressClickRef.current) {
           window.setTimeout(() => {
@@ -543,7 +553,7 @@ export function AnchorMarker({
             deltaMs: result - anchor.atMs,
             snapMs: scale.anchorSnapMs,
           });
-        } else if (attemptedMove) {
+        } else if (finalDropAttemptedMove) {
           interaction?.onInvalidDrop?.(
             blockedMessage ?? "节点已到当前时间范围边界，仍保留在原位置。",
           );

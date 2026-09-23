@@ -19,6 +19,8 @@ type CommonProps<TOption extends PickerOption> = {
   getOptionLabel: (option: TOption) => string;
   getOptionDescription?: (option: TOption) => string;
   renderOption: (option: TOption) => ReactNode;
+  /** Content rendered before the input when a single value is selected. */
+  renderSelectedAdornment?: (option: TOption) => ReactNode;
   renderSelected?: (option: TOption) => ReactNode;
   excludeIds?: string[];
   placeholder?: string;
@@ -61,6 +63,7 @@ export function AsyncCombobox<TOption extends PickerOption>({
   getOptionLabel,
   getOptionDescription,
   renderOption,
+  renderSelectedAdornment,
   excludeIds = [],
   placeholder = "输入关键词搜索",
   disabled = false,
@@ -134,6 +137,7 @@ export function AsyncCombobox<TOption extends PickerOption>({
     (id: string) => state.optionCache.get(id),
     [state.optionCache],
   );
+  const selectedOption = value ? optionById(value) : undefined;
 
   return (
     <div className={cn("min-w-0", className)}>
@@ -196,6 +200,14 @@ export function AsyncCombobox<TOption extends PickerOption>({
           data-invalid={invalid || undefined}
           className="flex min-h-9 w-full min-w-0 items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-[invalid=true]:border-destructive data-[invalid=true]:ring-3 data-[invalid=true]:ring-destructive/20 data-disabled:cursor-not-allowed data-disabled:opacity-50 dark:data-[invalid=true]:border-destructive/50 dark:data-[invalid=true]:ring-destructive/40"
         >
+          {selectedOption && renderSelectedAdornment ? (
+            <span
+              aria-hidden="true"
+              className="flex shrink-0 items-center pl-2"
+            >
+              {renderSelectedAdornment(selectedOption)}
+            </span>
+          ) : null}
           <Combobox.Input
             id={inputId}
             aria-label={ariaLabel}
@@ -383,7 +395,7 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
                         aria-label={label}
                         className="group flex min-h-7 max-w-full items-center gap-1 rounded-md bg-muted px-2 text-xs focus-within:ring-2 focus-within:ring-ring"
                       >
-                        <span className="max-w-48 truncate">
+                        <span className="flex min-w-0 max-w-48 items-center gap-1 truncate">
                           {option && renderSelected ? renderSelected(option) : label}
                         </span>
                         <Combobox.ChipRemove

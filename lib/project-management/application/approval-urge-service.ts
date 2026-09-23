@@ -49,8 +49,12 @@ export async function loadApprovalUrgeTargets() {
   const ids = await activeGlobalApprovalAdministratorAccountIdsTx(prisma);
   const accounts = await prisma.account.findMany({
     where: { id: { in: ids }, person: { is: { status: "ACTIVE" } } },
-    select: { id: true, person: { select: { displayName: true } } },
+    select: { id: true, person: { select: { displayName: true, avatar: true } } },
     orderBy: { id: "asc" },
   });
-  return accounts.map((account) => ({ accountId: account.id, displayName: account.person?.displayName ?? "审批管理员" }));
+  return accounts.map((account) => ({
+    accountId: account.id,
+    displayName: account.person?.displayName ?? "审批管理员",
+    avatar: account.person?.avatar ?? null,
+  }));
 }

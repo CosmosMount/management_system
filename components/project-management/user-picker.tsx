@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   resolvePeopleOptionsByIds,
@@ -10,6 +9,7 @@ import {
   AsyncCombobox,
   AsyncMultiCombobox,
 } from "@/components/entity-picker/async-combobox";
+import { PersonAvatar } from "@/components/project-management/person-avatar";
 import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 
 export type UserPickerScope =
@@ -73,6 +73,9 @@ export function UserSelect({
       getOptionLabel={(option) => option.displayName}
       getOptionDescription={getUserOptionDescription}
       renderOption={(option) => <UserOptionContent option={option} />}
+      renderSelectedAdornment={(option) => (
+        <PersonAvatar option={option} size="small" />
+      )}
     />
   );
 }
@@ -106,6 +109,7 @@ export function UserMultiSelect({
       getOptionLabel={(option) => option.displayName}
       getOptionDescription={getUserOptionDescription}
       renderOption={(option) => <UserOptionContent option={option} />}
+      renderSelected={(option) => <UserSelectedContent option={option} />}
     />
   );
 }
@@ -175,19 +179,7 @@ function useUserPicker(scope: UserPickerScope, initialOptions: PersonOptionDto[]
 function UserOptionContent({ option }: { option: UserPickerOption }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
-      {option.avatar ? (
-        <Image
-          src={option.avatar}
-          alt=""
-          width={32}
-          height={32}
-          className="size-8 shrink-0 rounded-full object-cover"
-        />
-      ) : (
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">
-          {option.displayName.slice(0, 1)}
-        </span>
-      )}
+      <PersonAvatar option={option} />
       <span className="min-w-0">
         <span className="block truncate font-medium">{option.displayName}</span>
         <span className="block truncate text-xs text-muted-foreground">
@@ -195,6 +187,15 @@ function UserOptionContent({ option }: { option: UserPickerOption }) {
         </span>
       </span>
     </div>
+  );
+}
+
+function UserSelectedContent({ option }: { option: UserPickerOption }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <PersonAvatar option={option} size="small" />
+      <span className="min-w-0 truncate">{option.displayName}</span>
+    </span>
   );
 }
 

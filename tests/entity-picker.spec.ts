@@ -94,6 +94,24 @@ test.describe("entity picker controlled regressions", () => {
     await expect(multi).toHaveAttribute("aria-expanded", "true");
   });
 
+  test("renders custom selected content for single and multi person-style values", async ({ page }) => {
+    await expect(page.getByLabel("头像单选选择器", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("fixture-single-selected-avatar")).toHaveText("A");
+    await expect(page.getByTestId("fixture-multi-selected-avatar")).toHaveText("●");
+
+    const single = page.getByLabel("头像单选选择器", { exact: true });
+    await single.click();
+    await expect(page.getByRole("option", { name: "头像人员 B" })).toBeVisible();
+    await page.getByRole("option", { name: "头像人员 B" }).click();
+    await expect(page.getByTestId("fixture-single-selected-avatar")).toHaveText("B");
+
+    const multi = page.getByLabel("头像多选选择器", { exact: true });
+    await multi.click();
+    await page.getByRole("option", { name: "头像人员 B" }).click();
+    await expect(page.getByTestId("fixture-multi-selected-avatar")).toHaveCount(2);
+    await expectHealthyPage(page);
+  });
+
   test("enforces the 50-item limit while keeping results browsable", async ({ page }) => {
     await expect(page.getByTestId("limit-count")).toHaveText("50");
     await expect(page.getByText(/已达到最多 50 项/)).toBeVisible();
