@@ -1,5 +1,5 @@
 // @playwright-project ui
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Dialog, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createTaskDraft } from "../lib/project-management/application/lifecycle-service";
@@ -766,6 +766,43 @@ test.describe("project management UI project-management-ui-composer", () => {
           "data-anchor-multi-selected",
           "false",
         );
+
+        const noOpDragMarkerBox = await markerM1.boundingBox();
+        if (!noOpDragMarkerBox) {
+          throw new Error("拖回原位回归所需的时间节点不可见");
+        }
+        const noOpAnchorLabels = await Promise.all([
+          markerM1.getAttribute("aria-label"),
+          markerM2.getAttribute("aria-label"),
+          markerM3.getAttribute("aria-label"),
+        ]);
+        const noOpDropMessages: string[] = [];
+        const captureNoOpDropDialog = async (dialog: Dialog) => {
+          noOpDropMessages.push(dialog.message());
+          await dialog.dismiss();
+        };
+        page.on("dialog", captureNoOpDropDialog);
+        try {
+          const noOpDragCenter = {
+            x: noOpDragMarkerBox.x + noOpDragMarkerBox.width / 2,
+            y: noOpDragMarkerBox.y + noOpDragMarkerBox.height / 2,
+          };
+          await page.mouse.move(noOpDragCenter.x, noOpDragCenter.y);
+          await page.mouse.down();
+          await page.mouse.move(noOpDragCenter.x + 80, noOpDragCenter.y, {
+            steps: 8,
+          });
+          await page.mouse.move(noOpDragCenter.x, noOpDragCenter.y, {
+            steps: 8,
+          });
+          await page.mouse.up();
+        } finally {
+          page.off("dialog", captureNoOpDropDialog);
+        }
+        expect(noOpDropMessages).toEqual([]);
+        await expect(markerM1).toHaveAttribute("aria-label", noOpAnchorLabels[0]!);
+        await expect(markerM2).toHaveAttribute("aria-label", noOpAnchorLabels[1]!);
+        await expect(markerM3).toHaveAttribute("aria-label", noOpAnchorLabels[2]!);
 
         const invalidDragMarkerBox = await markerM1.boundingBox();
         const invalidDragRowBox = await planRow.boundingBox();
