@@ -23,7 +23,6 @@ import { jsonValue } from "@/lib/project-management/application/prisma-json";
 const SUPER_ADMINISTRATOR_NOTIFICATION_KINDS = new Set<
   ProjectManagementNotificationPayload["kind"]
 >([
-  "task_assigned",
   "task_updated",
   "task_urged",
   "task_activated",
@@ -43,7 +42,6 @@ const SUPER_ADMINISTRATOR_NOTIFICATION_KINDS = new Set<
   "revision_cancelled",
   "project_establishment_submitted",
   "project_establishment_result",
-  "project_member_added",
   "project_updated",
   "project_task_changed",
   "project_completed",

@@ -63,14 +63,15 @@ export async function replaceProjectMembersTx(tx: PrismaTx, project: ProjectForM
   if (changedCurrent.length) await tx.projectMember.updateMany({ where: { id: { in: changedCurrent.map((member) => member.id) } }, data: { removedAt: new Date(), removedByAccountId: actor.accountId } });
   const removed = project.members.filter((member) => !requestedById.has(member.personId));
   if (removed.length) await tx.projectMember.updateMany({ where: { id: { in: removed.map((member) => member.id) } }, data: { removedAt: new Date(), removedByAccountId: actor.accountId } });
-  const additions = requested.filter((member) => currentById.get(member.personId)?.role !== member.role);
-  if (additions.length) {
-    await tx.projectMember.createMany({ data: additions.map((member) => ({ projectId: project.id, personId: member.personId, role: member.role, createdByAccountId: actor.accountId })) });
-    if (options.notifyAdditions !== false) {
-      for (const member of additions) {
-        const recipients = await recipientsForPersonIdsTx(tx, [member.personId]);
-        await createProjectManagementEventNotificationsTx(tx, { actor, project: { id: project.id, name: targetProjectName }, kind: "project_member_added", category: "PROJECT", eventKey: `pm:project:${project.id}:member:${member.personId}:${member.role}:${project.lockVersion + 1}`, title: "你已被加入项目", summary: `你已作为${member.role === "OWNER" ? "负责人" : "参与人"}加入项目「${targetProjectName}」`, entityType: "ProjectMember", entityId: member.personId, linkPath: `/progress/projects/${project.id}`, mandatory: false, recipients, context: { role: member.role } });
-      }
+  const insertions = requested.filter((member) => currentById.get(member.personId)?.role !== member.role);
+  if (insertions.length) {
+    await tx.projectMember.createMany({ data: insertions.map((member) => ({ projectId: project.id, personId: member.personId, role: member.role, createdByAccountId: actor.accountId })) });
+  }
+  const additions = insertions.filter((member) => !currentById.has(member.personId));
+  if (additions.length && options.notifyAdditions !== false) {
+    for (const member of additions) {
+      const recipients = await recipientsForPersonIdsTx(tx, [member.personId]);
+      await createProjectManagementEventNotificationsTx(tx, { actor, project: { id: project.id, name: targetProjectName }, kind: "project_member_added", category: "PROJECT", eventKey: `pm:project:${project.id}:member:${member.personId}:${member.role}:${project.lockVersion + 1}`, title: "你已被加入项目", summary: `你已作为${member.role === "OWNER" ? "负责人" : "参与人"}加入项目「${targetProjectName}」`, entityType: "ProjectMember", entityId: member.personId, linkPath: `/progress/projects/${project.id}`, mandatory: false, recipients, context: { role: member.role } });
     }
   }
 }

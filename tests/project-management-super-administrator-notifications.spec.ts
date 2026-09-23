@@ -7,7 +7,6 @@ import { createProjectManagementEventNotificationsTx } from "../lib/project-mana
 import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 
 const EVENT_CASES: Array<[ProjectManagementNotificationPayload["kind"], ProjectManagementNotificationCategory]> = [
-  ["task_assigned", "TASK"],
   ["task_updated", "TASK"],
   ["task_activated", "TASK"],
   ["task_deleted", "TASK"],
@@ -24,7 +23,6 @@ const EVENT_CASES: Array<[ProjectManagementNotificationPayload["kind"], ProjectM
   ["revision_cancelled", "REVISION"],
   ["project_establishment_submitted", "PROJECT"],
   ["project_establishment_result", "PROJECT"],
-  ["project_member_added", "PROJECT"],
   ["project_updated", "PROJECT"],
   ["project_task_changed", "PROJECT"],
   ["project_completed", "PROJECT"],
@@ -138,6 +136,41 @@ test("super administrator eligibility and preferences apply even without origina
     const input = eventInput("task_updated", "TASK");
     await createProjectManagementEventNotificationsTx(tx, input);
     expect(await tx.inAppNotification.count({ where: { eventKey: `${input.eventKey}:inapp:${administrator.accountId}` } })).toBe(0);
+  });
+});
+
+test("membership notifications do not subscribe super administrators", async () => {
+  await withRollback(async (tx) => {
+    const original = await createRecipient(tx);
+    const administrator = await createRecipient(tx, { role: "SUPER_ADMINISTRATOR" });
+    for (const [kind, category] of [
+      ["task_assigned", "TASK"],
+      ["project_member_added", "PROJECT"],
+    ] as const) {
+      const input = {
+        ...eventInput(kind, category),
+        recipients: [original],
+      };
+      await createProjectManagementEventNotificationsTx(tx, input);
+      const notifications = await tx.inAppNotification.findMany({
+        where: { eventKey: { startsWith: `${input.eventKey}:inapp:` } },
+      });
+      expect(notifications.map((notification) => notification.recipientAccountId)).toEqual([
+        original.accountId,
+      ]);
+      const outbox = await tx.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `${input.eventKey}:feishu` },
+      });
+      expect(
+        (JSON.parse(outbox.payload) as ProjectManagementNotificationPayload)
+          .recipientOpenIds,
+      ).toEqual([original.openId]);
+      expect(
+        notifications.some(
+          (notification) => notification.recipientAccountId === administrator.accountId,
+        ),
+      ).toBe(false);
+    }
   });
 });
 

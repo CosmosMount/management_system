@@ -28,6 +28,16 @@ import type {
 import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
 import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
 import { filterActiveFeishuOpenIds } from "@/lib/active-account";
+import {
+  DEFAULT_FEISHU_IDENTITY_WHERE,
+  FEISHU_OPEN_IDENTITY_ORDER,
+  FEISHU_OPEN_IDENTITY_SELECT,
+  firstNonEmptyFeishuOpenId,
+} from "@/lib/project-management/application/feishu-identity";
+import {
+  FROZEN_NOTIFICATION_NEXT_RUN_AT,
+  MAX_NOTIFICATION_ATTEMPTS,
+} from "@/lib/notification-outbox/constants";
 import { prisma } from "@/lib/prisma";
 
 function parseProjectManagementNotification(row: NotificationOutbox): {
@@ -98,7 +108,13 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
         cancelReason,
       };
     }
-    const openIds = await eligibleSummaryRecipients(payload, await filterActiveFeishuOpenIds(uniqueOpenIds(payload)));
+    const activeOpenIds = await filterActiveFeishuOpenIds(
+      uniqueOpenIds(payload),
+    );
+    const openIds = await eligibleMembershipNotificationOpenIds(
+      payload,
+      await eligibleSummaryRecipients(payload, activeOpenIds),
+    );
     return {
       supported: true,
       openIds,
@@ -134,14 +150,37 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
         "项目管理聚合批次包含不可聚合或类别不一致的通知",
       );
     }
-    if (
-      (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
-    ) {
+    if ((await filterActiveFeishuOpenIds([recipientOpenId])).length === 0) {
       throw new CanceledNotificationError("收件人已停用，取消本次聚合投递");
     }
-    if (parsed.length === 1) {
+    const eligibleRows = [];
+    const ineligibleRows = [];
+    for (const item of parsed) {
+      if (
+        (await eligibleMembershipNotificationOpenIds(item.payload, [
+          recipientOpenId,
+        ])).length > 0
+      ) {
+        eligibleRows.push(item);
+      } else {
+        ineligibleRows.push(item);
+      }
+    }
+    if (ineligibleRows.length > 0) {
+      await cancelIneligibleAggregatedRecipients(
+        ineligibleRows.map(({ row }) => row.id),
+        recipientOpenId,
+        context,
+      );
+    }
+    if (eligibleRows.length === 0) {
+      throw new CanceledNotificationError(
+        "收件人已不再具备成员通知资格，取消本次聚合投递",
+      );
+    }
+    if (eligibleRows.length === 1) {
       return sendProjectManagementNotificationToRecipient(
-        parsed[0]!.row,
+        eligibleRows[0]!.row,
         recipientOpenId,
       );
     }
@@ -153,7 +192,7 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
         message: {
           type: "interactive",
           card: buildProjectManagementAggregatedCard(
-            parsed.map(({ row, payload }) => ({
+            eligibleRows.map(({ row, payload }) => ({
               payload,
               createdAt: row.createdAt,
             })),
@@ -173,7 +212,13 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
   async sendComposite(row) {
     const { payload, botKind } = parseProjectManagementNotification(row);
     const card = buildProjectManagementCard(payload, row.createdAt);
-    const recipients = await eligibleSummaryRecipients(payload, uniqueOpenIds(payload));
+    const recipients = await eligibleMembershipNotificationOpenIds(
+      payload,
+      await eligibleSummaryRecipients(
+        payload,
+        await filterActiveFeishuOpenIds(uniqueOpenIds(payload)),
+      ),
+    );
     const results = await Promise.allSettled(
       recipients.map((recipientOpenId) =>
         sendFeishuDirectMessage({
@@ -213,6 +258,14 @@ async function sendProjectManagementNotificationToRecipient(
       throw new CanceledNotificationError("收件人已不再具有该总结的接收权限，取消总结投递");
     }
     if (
+      !(await eligibleMembershipNotificationOpenIds(payload, [recipientOpenId]))
+        .length
+    ) {
+      throw new CanceledNotificationError(
+        "收件人已不再具备成员通知资格，取消本次投递",
+      );
+    }
+    if (
       (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
     ) {
       throw new CanceledNotificationError("收件人已停用，取消本次投递");
@@ -242,6 +295,158 @@ async function sendProjectManagementNotificationToRecipient(
         },
       }),
     );
+}
+
+async function eligibleMembershipNotificationOpenIds(
+  payload: ProjectManagementNotificationPayload,
+  candidateOpenIds: string[],
+) {
+  if (
+    payload.kind !== "task_assigned" &&
+    payload.kind !== "project_member_added"
+  ) {
+    return candidateOpenIds;
+  }
+  const candidates = new Set(
+    candidateOpenIds.map((openId) => openId.trim()).filter(Boolean),
+  );
+  if (candidates.size === 0) return [];
+
+  const targetOpenIds =
+    payload.kind === "project_member_added"
+      ? await projectMemberOpenIds(payload)
+      : await taskMemberOpenIds(payload);
+  return targetOpenIds.filter((openId) => candidates.has(openId));
+}
+
+async function taskMemberOpenIds(
+  payload: ProjectManagementNotificationPayload,
+) {
+  const affectedPersonId = contextString(payload, "affectedPersonId");
+  if (affectedPersonId) {
+    return personOpenIds(affectedPersonId);
+  }
+  if (!payload.taskId) return [];
+  const task = await prisma.task.findFirst({
+    where: { id: payload.taskId, deletedAt: null },
+    select: {
+      members: {
+        where: {
+          removedAt: null,
+          role: { in: ["OWNER", "PARTICIPANT"] },
+        },
+        select: {
+          person: {
+            select: {
+              account: {
+                select: {
+                  identities: {
+                    where: DEFAULT_FEISHU_IDENTITY_WHERE,
+                    select: FEISHU_OPEN_IDENTITY_SELECT,
+                    orderBy: FEISHU_OPEN_IDENTITY_ORDER,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  return task?.members.flatMap((member) => {
+    const openId = member.person.account
+      ? firstNonEmptyFeishuOpenId(member.person.account.identities)
+      : null;
+    return openId ? [openId] : [];
+  }) ?? [];
+}
+
+async function projectMemberOpenIds(
+  payload: ProjectManagementNotificationPayload,
+) {
+  if (!payload.projectId || payload.entityType !== "ProjectMember") return [];
+  const member = await prisma.projectMember.findFirst({
+    where: {
+      projectId: payload.projectId,
+      personId: payload.entityId,
+      removedAt: null,
+    },
+    select: {
+      person: {
+        select: {
+          account: {
+            select: {
+              identities: {
+                where: DEFAULT_FEISHU_IDENTITY_WHERE,
+                select: FEISHU_OPEN_IDENTITY_SELECT,
+                orderBy: FEISHU_OPEN_IDENTITY_ORDER,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  const openId = member?.person.account
+    ? firstNonEmptyFeishuOpenId(member.person.account.identities)
+    : null;
+  return openId ? [openId] : [];
+}
+
+async function personOpenIds(personId: string) {
+  const person = await prisma.person.findUnique({
+    where: { id: personId },
+    select: {
+      account: {
+        select: {
+          identities: {
+            where: DEFAULT_FEISHU_IDENTITY_WHERE,
+            select: FEISHU_OPEN_IDENTITY_SELECT,
+            orderBy: FEISHU_OPEN_IDENTITY_ORDER,
+          },
+        },
+      },
+    },
+  });
+  const openId = person?.account
+    ? firstNonEmptyFeishuOpenId(person.account.identities)
+    : null;
+  return openId ? [openId] : [];
+}
+
+function contextString(
+  payload: ProjectManagementNotificationPayload,
+  key: string,
+) {
+  const value = payload.context[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function cancelIneligibleAggregatedRecipients(
+  outboxIds: string[],
+  recipientOpenId: string,
+  context: {
+    batchId: string;
+    claim: { attempts: number; lockedUntil: Date };
+  },
+) {
+  await prisma.notificationOutboxRecipient.updateMany({
+    where: {
+      outboxId: { in: outboxIds },
+      deliveryBatchId: context.batchId,
+      openId: recipientOpenId,
+      status: "PROCESSING",
+      attempts: context.claim.attempts,
+      lockedUntil: context.claim.lockedUntil,
+    },
+    data: {
+      status: "CANCELED",
+      attempts: MAX_NOTIFICATION_ATTEMPTS,
+      nextRunAt: FROZEN_NOTIFICATION_NEXT_RUN_AT,
+      lockedUntil: null,
+      lastError: "收件人已不再具备成员通知资格",
+    },
+  });
 }
 
 async function eligibleSummaryRecipients(payload: ProjectManagementNotificationPayload, openIds: string[]) {
