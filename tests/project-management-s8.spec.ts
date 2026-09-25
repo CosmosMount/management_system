@@ -844,7 +844,7 @@ test.describe("project management S8 dashboard and notifications", () => {
       }),
     ).toBe(1);
     const expectedOrdinaryRecipients = await expectedProjectManagementRecipients(
-      [{ account: { id: user.accountId }, openId: user.openId }], "TASK",
+      [{ account: { id: user.accountId }, openId: user.openId }], "TASK", false, false,
     );
     const ordinaryOutbox = await prisma.notificationOutbox.findUnique({ where: { eventKey: `${ordinaryKey}:feishu` } });
     expect(ordinaryOutbox !== null).toBe(expectedOrdinaryRecipients.openIds.length > 0);

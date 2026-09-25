@@ -44,10 +44,13 @@ test("项目域手机卡片、详情和已有工作流保持可达并生成视�
     for (const route of routes) {
       if (width === 360 && !["projects", "tasks", "task-detail"].includes(route.name)) continue;
       await page.goto(route.url);
-      await expect(page.locator(route.ready)).toBeVisible();
+      const ready = route.name === "meetings"
+        ? page.getByRole("region", { name: "会议列表" })
+        : page.locator(route.ready);
+      await expect(ready).toBeVisible();
       await expectHealthyPage(page);
       if (width < 1024 && ["projects", "tasks"].includes(route.name)) {
-        const card = page.locator(route.ready);
+        const card = ready;
         const box = await card.boundingBox();
         expect(box).not.toBeNull();
         expect(box!.width).toBeLessThanOrEqual(width);
