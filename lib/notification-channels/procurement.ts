@@ -37,6 +37,10 @@ import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
 import type { FeishuSendResult } from "@/lib/feishu-message";
 import { filterActiveFeishuOpenIds } from "@/lib/active-account";
 import { parseNotificationPayload } from "@/lib/notification-payload";
+import { prisma } from "@/lib/prisma";
+import { collectReminderRecipientOpenIds } from "@/lib/procurement-reminder-recipients";
+import { buildStaleReminderCard, sendReminderCardToOpenIdResult, toReminderOrderCardPayload } from "@/lib/procurement-reminder-card";
+import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 
 function parseRow(row: NotificationOutbox): {
   data: OrderOutboxPayload;
@@ -61,7 +65,9 @@ function parseRow(row: NotificationOutbox): {
   const expected =
     data.kind === "order"
       ? resolveProcurementBotKind(data.order.status)
-      : "notification";
+      : data.kind === "scheduled_reminder"
+        ? resolveProcurementBotKind(data.expectedStatus)
+        : "notification";
   if (actual !== expected) {
     throw new NonRetryableNotificationError(
       `采购通知机器人类型无效：${data.kind} 应使用 ${expected}`,
@@ -80,6 +86,23 @@ function deliveryTarget(result: FeishuSendResult): NotificationDeliveryTarget {
   };
 }
 
+async function currentScheduledReminderOrder(
+  data: Extract<OrderOutboxPayload, { kind: "scheduled_reminder" }>,
+) {
+  const order = await prisma.purchaseOrder.findUnique({
+    where: { id: data.orderId },
+    include: { items: true },
+  });
+  if (
+    !order ||
+    order.status !== data.expectedStatus ||
+    order.statusEnteredAt.toISOString() !== data.expectedStatusEnteredAt
+  ) {
+    return null;
+  }
+  return order;
+}
+
 async function sendToRecipient(
   row: NotificationOutbox,
   recipientOpenId: string,
@@ -92,6 +115,19 @@ async function sendToRecipient(
   }
   const { data, botKind } = parseRow(row);
   const context = { appOrigin: data.appOrigin ?? defaultAppOrigin() };
+  if (data.kind === "scheduled_reminder") {
+    const order = await currentScheduledReminderOrder(data);
+    if (!order) throw new CanceledNotificationError("订单已离开本次催办环节");
+    const currentRecipients = await collectReminderRecipientOpenIds(order);
+    if (!currentRecipients.includes(recipientOpenId)) {
+      throw new CanceledNotificationError("收件人不再负责本次催办环节");
+    }
+    const payload = await enrichOrderCardPayloadFromDb(toReminderOrderCardPayload(order));
+    const stuckDays = Math.max(1, Math.floor((Date.now() - order.statusEnteredAt.getTime()) / (24 * 60 * 60 * 1000)));
+    const card = await buildStaleReminderCard(payload, stuckDays, context);
+    const result = await sendReminderCardToOpenIdResult(recipientOpenId, card, botKind, order.id, order.status);
+    return deliveryTarget(result);
+  }
   if (data.kind === "order") {
     const result = await sendOrderNotificationToOpenId(
       data.order,
@@ -147,6 +183,20 @@ export const procurementNotificationChannel: NotificationChannelAdapter = {
   channel: "procurement",
   async resolveRecipientPlan(row) {
     const { data } = parseRow(row);
+    if (data.kind === "scheduled_reminder") {
+      const order = await currentScheduledReminderOrder(data);
+      if (!order) {
+        return { supported: true, openIds: [], cancelReason: "订单已离开本次催办环节" };
+      }
+      const openIds = await collectReminderRecipientOpenIds(order);
+      return {
+        supported: true,
+        openIds,
+        directOpenIds: openIds,
+        requiresDirectRecipient: true,
+        emptyRecipientReason: "当前环节没有可催办的处理人",
+      };
+    }
     if (data.kind === "order") {
       const directOpenIds = await collectOrderNotificationRecipientOpenIds(
         data.order,
@@ -188,6 +238,9 @@ export const procurementNotificationChannel: NotificationChannelAdapter = {
   async sendComposite(row) {
     const { data, botKind } = parseRow(row);
     const context = { appOrigin: data.appOrigin ?? defaultAppOrigin() };
+    if (data.kind === "scheduled_reminder") {
+      throw new NonRetryableNotificationError("定时催办仅支持逐收件人投递");
+    }
     if (data.kind === "order") {
       await sendOrderNotification(data.order, context, botKind);
       return;

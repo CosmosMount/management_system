@@ -13,12 +13,14 @@ import {
 import { MAX_NOTIFICATION_ATTEMPTS } from "../lib/notification-outbox/constants";
 import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
+import { procurementNotificationChannel } from "../lib/notification-channels/procurement";
 import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import { projectManagementNotificationPayloadSchema, type ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 import { enqueueProjectManagementNotification, enqueueProjectManagementNotificationTx } from "../lib/project-management/notifications/events";
 import { runProjectManagementNotificationRetention } from "../lib/project-management/application/maintenance-service";
 import { prisma } from "../lib/prisma";
+import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
 const EVENT_PREFIX = "playwright:notification-adapter:";
@@ -196,12 +198,22 @@ test.describe("notification outbox channel adapters", () => {
     await prisma.procurementFeishuCard.deleteMany({
       where: { orderId: { startsWith: "outbox-adapter-order-" } },
     });
+    await prisma.purchaseOrder.deleteMany({
+      where: { id: { startsWith: "outbox-adapter-order-reminder-" } },
+    });
+    await prisma.userRole.deleteMany({
+      where: {
+        openId: { in: ["ou_outbox_success", "ou_outbox_retry"] },
+        role: "TEAM_ADMIN",
+        team: "通用",
+      },
+    });
     await prisma.userRole.deleteMany({
       where: { openId: "ou_outbox_approver" },
     });
     await prisma.user.deleteMany({
       where: {
-        openId: { in: ["ou_outbox_approver", "ou_outbox_link_approval"] },
+        openId: { in: ["ou_outbox_approver", "ou_outbox_link_approval", "ou_outbox_success", "ou_outbox_retry"] },
       },
     });
   });
@@ -929,6 +941,109 @@ test.describe("notification outbox channel adapters", () => {
     expect(row.recipients).toHaveLength(0);
     expect(webhookAttempts).toBe(0);
     expect(sendAttempts).toEqual([]);
+  });
+
+  test("定时催办并发扫描只入队一次，失败收件人重试不重发已成功者", async () => {
+    const orderId = `outbox-adapter-order-reminder-${randomUUID()}`;
+    const team = "通用";
+    const initiator = await resolveFeishuIdentityForUser({
+      openId: "ou_outbox_approver",
+      unionId: "on_outbox_approver",
+      name: "测试采购人",
+    });
+    const user = await prisma.user.upsert({
+      where: { openId: "ou_outbox_approver" },
+      update: { accountId: initiator.account.id, name: "测试采购人" },
+      create: {
+        accountId: initiator.account.id,
+        openId: "ou_outbox_approver",
+        name: "测试采购人",
+      },
+    });
+    for (const openId of ["ou_outbox_success", "ou_outbox_retry"]) {
+      const identity = await prisma.accountIdentity.findUniqueOrThrow({
+        where: {
+          provider_tenantId_openId: {
+            provider: "FEISHU",
+            tenantId: "default",
+            openId,
+          },
+        },
+      });
+      await prisma.user.upsert({
+        where: { openId },
+        update: { unionId: `on_outbox_${openId === "ou_outbox_success" ? "success" : "retry"}` },
+        create: {
+          accountId: identity.accountId,
+          openId,
+          unionId: `on_outbox_${openId === "ou_outbox_success" ? "success" : "retry"}`,
+          name: `测试催办收件人 ${openId}`,
+        },
+      });
+      await prisma.userRole.create({
+        data: { accountId: identity.accountId, openId, role: "TEAM_ADMIN", team },
+      });
+    }
+    const enteredAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await prisma.purchaseOrder.create({
+      data: {
+        id: orderId,
+        orderNo: `PW-REMINDER-${randomUUID()}`,
+        initiatorId: user.id,
+        initiatorName: user.name,
+        team,
+        techGroup: "测试技术组",
+        totalPrice: 42,
+        status: "MANAGEMENT_REVIEW",
+        statusEnteredAt: enteredAt,
+        techGroupApproved: true,
+        items: { create: [{ name: "测试物料", spec: "测试规格", quantity: 1, unitPrice: 42 }] },
+      },
+    });
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+    const scanCounts = await Promise.all([
+      runProcurementStaleReminders(),
+      runProcurementStaleReminders(),
+    ]);
+    expect(scanCounts.reduce((total, count) => total + count, 0)).toBe(1);
+    const [outbox] = await prisma.notificationOutbox.findMany({
+      where: { channel: "procurement", type: "scheduled_reminder", eventKey: { contains: orderId } },
+    });
+    expect(outbox).toBeTruthy();
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).lastReminderAt).not.toBeNull();
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
+    process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
+    process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "on_outbox_success,on_outbox_retry";
+    failRecipientOnce = "on_outbox_retry";
+    await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true });
+    const first = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { id: outbox.id },
+      include: { recipients: true },
+    });
+    expect(first.recipients).toEqual(expect.arrayContaining([
+      expect.objectContaining({ openId: "ou_outbox_success", status: "SENT" }),
+      expect.objectContaining({ openId: "ou_outbox_retry", status: "FAILED" }),
+    ]));
+    expect(await resetNotificationOutboxForRetry({ id: outbox.id, channel: "procurement", type: "scheduled_reminder" })).toEqual({ count: 1 });
+    sendAttempts = [];
+    expect(await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true })).toBe(1);
+    expect(sendAttempts).toEqual(["on_outbox_retry"]);
+    await prisma.userRole.updateMany({
+      where: { openId: "ou_outbox_retry", role: "TEAM_ADMIN", team, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    sendAttempts = [];
+    await expect(procurementNotificationChannel.sendToRecipient(outbox, "ou_outbox_retry"))
+      .rejects.toThrow("收件人不再负责本次催办环节");
+    expect(sendAttempts).toEqual([]);
+    await prisma.purchaseOrder.update({
+      where: { id: orderId },
+      data: { status: "TEACHER_REVIEW", statusEnteredAt: new Date() },
+    });
+    expect(await procurementNotificationChannel.resolveRecipientPlan(outbox)).toMatchObject({
+      cancelReason: "订单已离开本次催办环节",
+    });
   });
 
   test("采购审批选择审批机器人并保留完整卡片和 CardKit 跟踪", async () => {

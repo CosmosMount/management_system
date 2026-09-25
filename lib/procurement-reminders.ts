@@ -1,25 +1,15 @@
-import type { OrderStatus } from "@prisma/client";
+import { Prisma, type OrderStatus } from "@prisma/client";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
-import {
-  mapOrderItems,
-  type OrderCardPayload,
-} from "@/lib/procurement-notification-contract";
+import type { OrderCardPayload } from "@/lib/procurement-notification-contract";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
-import { sendFeishuDirectMessage } from "@/lib/feishu-message";
-import {
-  buildProcurementCardKitCard,
-  supportsProcurementCardApproval,
-  supportsProcurementCardConfirm,
-} from "@/lib/feishu-procurement-card";
-import {
-  resolveProcurementCardScreenshotOptions,
-  resolveProcurementFinanceReviewAttachmentOptions,
-} from "@/lib/feishu-procurement-card-assets";
-import { sendTrackedProcurementCardKitDm } from "@/lib/feishu-procurement-card-sync";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import type { NotificationContext } from "@/lib/app-origin";
+import { buildReminderCard, sendReminderCardToOpenId, toReminderOrderCardPayload } from "@/lib/procurement-reminder-card";
+import { collectReminderRecipientOpenIds } from "@/lib/procurement-reminder-recipients";
+import { enqueueNotificationTx } from "@/lib/notification-outbox";
+import type { OrderOutboxPayload } from "@/lib/notification-contracts/procurement";
 
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
@@ -51,137 +41,11 @@ function daysStuck(statusEnteredAt: Date): number {
 function shouldSendReminder(order: {
   statusEnteredAt: Date;
   lastReminderAt: Date | null;
-}): boolean {
-  const stuckMs = Date.now() - order.statusEnteredAt.getTime();
+}, now: Date): boolean {
+  const stuckMs = now.getTime() - order.statusEnteredAt.getTime();
   if (stuckMs < REMINDER_INTERVAL_MS) return false;
   if (!order.lastReminderAt) return true;
-  return Date.now() - order.lastReminderAt.getTime() >= REMINDER_INTERVAL_MS;
-}
-
-function toCardPayload(order: {
-  id: string;
-  orderNo: string;
-  initiatorName: string;
-  totalPrice: number;
-  status: OrderStatus;
-  team: string;
-  techGroup: string;
-  screenshotPath?: string | null;
-  items: { name: string; quantity: number; unitPrice: number }[];
-}): OrderCardPayload {
-  return {
-    id: order.id,
-    orderNo: order.orderNo,
-    initiatorName: order.initiatorName,
-    totalPrice: order.totalPrice,
-    status: order.status,
-    team: order.team,
-    techGroup: order.techGroup,
-    screenshotPath: order.screenshotPath,
-    items: mapOrderItems(order.items),
-  };
-}
-
-async function buildReminderCard(
-  order: OrderCardPayload,
-  context: NotificationContext | undefined,
-  options: {
-    headerTitle: string;
-    extraLines: string[];
-  },
-) {
-  const botKind = resolveProcurementBotKind(order.status);
-  const screenshotOptions = supportsProcurementCardConfirm(order.status)
-    ? await resolveProcurementCardScreenshotOptions(
-        order,
-        botKind,
-        context?.appOrigin,
-      )
-    : {};
-  const financeAttachmentOptions =
-    order.status === "PENDING_FINANCE_REVIEW"
-      ? await resolveProcurementFinanceReviewAttachmentOptions(
-          order,
-          botKind,
-          context?.appOrigin,
-        )
-      : {};
-
-  if (supportsProcurementCardApproval(order.status)) {
-    return buildProcurementCardKitCard(order, {
-      headerTitle: options.headerTitle,
-      headerTemplate: "orange",
-      detailFocus: "approval",
-      appOrigin: context?.appOrigin,
-      extraLines: options.extraLines,
-    });
-  }
-
-  return buildProcurementCardKitCard(order, {
-    headerTitle: options.headerTitle,
-    headerTemplate: "orange",
-    detailFocus:
-      order.status === "PENDING_APPLICANT_DOCS"
-        ? "upload"
-        : order.status === "PENDING_APPLICANT_CONFIRM"
-          ? "confirm"
-          : "approval",
-    primaryButtonText: "前往处理",
-    appOrigin: context?.appOrigin,
-    extraLines: options.extraLines,
-    readOnly: !supportsProcurementCardConfirm(order.status),
-    ...financeAttachmentOptions,
-    ...screenshotOptions,
-  });
-}
-
-async function buildStaleCard(
-  order: OrderCardPayload,
-  stuckDays: number,
-  context?: NotificationContext,
-) {
-  const statusLabel = statusLabels[order.status];
-  return buildReminderCard(order, context, {
-    headerTitle: "采购待办催办",
-    extraLines: [
-      `**当前环节**：${statusLabel}`,
-      `**已停留**：${stuckDays} 天未处理`,
-      "**请尽快处理，避免影响报销进度**",
-    ],
-  });
-}
-
-async function sendDirectStaleCard(
-  openId: string,
-  card: Record<string, unknown>,
-  botKind: FeishuBotKind = "notification",
-  orderId?: string,
-  cardStage?: OrderStatus,
-): Promise<boolean> {
-  if (card.schema === "2.0") {
-    const result = await sendTrackedProcurementCardKitDm(
-      openId,
-      card,
-      botKind,
-      orderId,
-      cardStage,
-    );
-    return result.status === "sent";
-  }
-
-  const result = await sendFeishuDirectMessage({
-    recipientOpenId: openId,
-    botKind,
-    purpose: botKind === "approval" ? "approval_request" : "notification",
-    message: { type: "interactive", card },
-    logContext: {
-      action: "sendProcurementReminder",
-      channel: "procurement",
-      entityType: "PurchaseOrder",
-      entityId: orderId,
-    },
-  });
-  return result.status === "sent";
+  return now.getTime() - order.lastReminderAt.getTime() >= REMINDER_INTERVAL_MS;
 }
 
 async function notifyInitiatorStale(
@@ -196,7 +60,7 @@ async function notifyInitiatorStale(
     select: { status: true },
   });
   if (!record) return 0;
-  return (await sendDirectStaleCard(
+  return (await sendReminderCardToOpenId(
     initiatorOpenId,
     card,
     botKind,
@@ -224,7 +88,7 @@ async function notifyRoleStale(
   for (const openId of openIds) {
     try {
       if (
-        await sendDirectStaleCard(openId, card, botKind, order.id, order.status)
+        await sendReminderCardToOpenId(openId, card, botKind, order.id, order.status)
       ) {
         successCount++;
       }
@@ -252,85 +116,85 @@ async function notifyRoleStale(
   return successCount;
 }
 
-async function sendStaleOrderReminder(
-  order: OrderCardPayload & {
-    teamApproved: boolean;
-    techGroupApproved: boolean;
-  },
-  stuckDays: number,
-  context?: NotificationContext,
-): Promise<number> {
-  const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
-  const card = await buildStaleCard(enrichedOrder, stuckDays, context);
-
-  if (
-    order.status === "PENDING_APPLICANT_DOCS" ||
-    order.status === "PENDING_APPLICANT_CONFIRM"
-  ) {
-    return notifyInitiatorStale(
-      order.id,
-      card,
-      resolveProcurementBotKind(order.status),
-    );
-  }
-
-  return deliverApproverReminderCard(order, card);
-}
-
-/** 在途订单当前环节停留超过 24h 且距上次催办已满 24h 时，私信该环节处理人 */
+/** 在途订单当前环节停留超过 24h 且距上次入队已满 24h 时，为当前处理人入队催办 */
 export async function runProcurementStaleReminders(
   context?: NotificationContext,
 ): Promise<number> {
-  const orders = await prisma.purchaseOrder.findMany({
-    where: { status: { in: REMINDABLE_STATUSES } },
-    include: { items: true },
-  });
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - REMINDER_INTERVAL_MS);
+  let enqueued = 0;
+  let afterId: string | undefined;
 
-  let sent = 0;
-  for (const order of orders) {
-    if (!shouldSendReminder(order)) continue;
+  while (true) {
+    const candidates = await prisma.purchaseOrder.findMany({
+      where: {
+        ...(afterId ? { id: { gt: afterId } } : {}),
+        status: { in: REMINDABLE_STATUSES },
+        statusEnteredAt: { lte: cutoff },
+        OR: [{ lastReminderAt: null }, { lastReminderAt: { lte: cutoff } }],
+      },
+      select: { id: true, orderNo: true },
+      orderBy: { id: "asc" },
+      take: 100,
+    });
+    if (candidates.length === 0) break;
+    afterId = candidates[candidates.length - 1].id;
 
-    if (
-      order.status === "MANAGEMENT_REVIEW" &&
-      order.teamApproved &&
-      order.techGroupApproved
-    ) {
-      continue;
-    }
-
-    const payload = toCardPayload(order);
-    const stuck = daysStuck(order.statusEnteredAt);
-
-    try {
-      const deliveryCount = await sendStaleOrderReminder(
-        {
-          ...payload,
-          teamApproved: order.teamApproved,
-          techGroupApproved: order.techGroupApproved,
-        },
-        stuck,
-        context,
-      );
-      if (deliveryCount === 0) continue;
-      await prisma.purchaseOrder.update({
-        where: { id: order.id },
-        data: { lastReminderAt: new Date() },
-      });
-      sent++;
-    } catch (err) {
-      logger.error("procurement.reminder.order.failed", {
-        module: "procurement",
-        action: "runProcurementStaleReminders",
-        entityType: "PurchaseOrder",
-        entityId: order.id,
-        orderNo: order.orderNo,
-        result: "failure",
-        error: err,
-      });
+    for (const candidate of candidates) {
+      try {
+        const created = await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw(Prisma.sql`
+            SELECT "id" FROM "PurchaseOrder"
+            WHERE "id" = ${candidate.id}
+            FOR UPDATE
+          `);
+          const order = await tx.purchaseOrder.findUnique({
+            where: { id: candidate.id },
+          });
+          if (!order || !REMINDABLE_STATUSES.includes(order.status) || !shouldSendReminder(order, now)) {
+            return false;
+          }
+          const openIds = await collectReminderRecipientOpenIds(order);
+          if (openIds.length === 0) return false;
+          const eventKey = `procurement:stale:${order.id}:${order.statusEnteredAt.toISOString()}:${Math.floor(now.getTime() / REMINDER_INTERVAL_MS)}`;
+          const result = await enqueueNotificationTx(tx, {
+            eventKey,
+            channel: "procurement",
+            botKind: resolveProcurementBotKind(order.status),
+            type: "scheduled_reminder",
+            payload: {
+              kind: "scheduled_reminder",
+              orderId: order.id,
+              expectedStatus: order.status,
+              expectedStatusEnteredAt: order.statusEnteredAt.toISOString(),
+              appOrigin: context?.appOrigin ?? null,
+            } satisfies OrderOutboxPayload,
+          });
+          if (result.created) {
+            await tx.purchaseOrder.update({
+              where: { id: order.id },
+              data: { lastReminderAt: now },
+            });
+          }
+          return result.created;
+        });
+        if (created) enqueued++;
+      } catch (error) {
+        logger.error("procurement.reminder.order.failed", {
+          module: "procurement",
+          action: "runProcurementStaleReminders",
+          entityType: "PurchaseOrder",
+          entityId: candidate.id,
+          orderNo: candidate.orderNo,
+          result: "failure",
+          error,
+        });
+      }
     }
   }
 
-  return sent;
+  if (enqueued > 0) drainNotificationOutboxSoon();
+  return enqueued;
 }
 
 async function reserveManualReminderSlot(orderId: string): Promise<boolean> {
@@ -383,7 +247,7 @@ export async function sendManualProcurementApproverReminder({
     return { ok: false, message: "订单不存在" };
   }
 
-  const payload = toCardPayload(order);
+  const payload = toReminderOrderCardPayload(order);
   const enrichedOrder = await enrichOrderCardPayloadFromDb(payload);
   const stuckDays = daysStuck(order.statusEnteredAt);
   const statusLabel = statusLabels[order.status];
