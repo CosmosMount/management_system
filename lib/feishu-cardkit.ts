@@ -1,5 +1,6 @@
 import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { fetchFeishu } from "@/lib/feishu-http";
 
 export class FeishuCardKitPermissionError extends Error {
   constructor(message: string) {
@@ -13,7 +14,7 @@ export async function createCardKitInstance(
   botKind: FeishuBotKind = "notification",
 ): Promise<string> {
   const token = await getFeishuTenantAccessTokenByBotKind(botKind);
-  const res = await fetch("https://open.feishu.cn/open-apis/cardkit/v1/cards", {
+  const res = await fetchFeishu("https://open.feishu.cn/open-apis/cardkit/v1/cards", {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -51,7 +52,7 @@ export async function updateCardKitInstance(
   botKind: FeishuBotKind = "notification",
 ): Promise<void> {
   const token = await getFeishuTenantAccessTokenByBotKind(botKind);
-  const res = await fetch(
+  const res = await fetchFeishu(
     `https://open.feishu.cn/open-apis/cardkit/v1/cards/${cardId}`,
     {
       method: "PUT",

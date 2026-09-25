@@ -1,4 +1,5 @@
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { fetchFeishu } from "@/lib/feishu-http";
 
 const FEISHU_API = "https://open.feishu.cn/open-apis";
 
@@ -56,7 +57,7 @@ async function feishuGet<T>(
       url.searchParams.set(key, value);
     }
 
-    const res = await fetch(url, {
+    const res = await fetchFeishu(url, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     });

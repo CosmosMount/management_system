@@ -4,11 +4,12 @@ import {
   type FeishuBotKind,
   type FeishuAppCredentials,
 } from "@/lib/feishu-app-config";
+import { fetchFeishu } from "@/lib/feishu-http";
 
 async function fetchTenantAccessToken(
   credentials: FeishuAppCredentials,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await fetchFeishu(
     "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
     {
       method: "POST",
@@ -37,7 +38,7 @@ async function fetchTenantAccessToken(
 
 export async function getFeishuAppAccessToken(): Promise<string> {
   const credentials = getProcurementFeishuCredentials();
-  const res = await fetch(
+  const res = await fetchFeishu(
     "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
     {
       method: "POST",
@@ -92,11 +93,11 @@ export const feishuCustomFetch: typeof fetch = async (input, init) => {
   if (url.includes("authen/v1/oidc/access_token")) {
     const code = extractCodeFromBody(init?.body);
     if (!code) {
-      return fetch(input, init);
+      return fetchFeishu(input, init);
     }
 
     const appAccessToken = await getFeishuAppAccessToken();
-    const tokenRes = await fetch(
+    const tokenRes = await fetchFeishu(
       "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token",
       {
         method: "POST",
@@ -140,5 +141,5 @@ export const feishuCustomFetch: typeof fetch = async (input, init) => {
     });
   }
 
-  return fetch(input, init);
+  return fetchFeishu(input, init);
 };
