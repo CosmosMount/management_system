@@ -2,8 +2,10 @@ export const NOTIFICATION_OUTBOX_CRON = "*/5 * * * * *";
 export const DEFAULT_CONTACT_SYNC_CRON = "30 8 * * *";
 export const UPLOAD_CLEANUP_CRON = "*/10 * * * *";
 export const PROCUREMENT_BUDGET_CRON = "*/10 * * * *";
-export const PROJECT_MANAGEMENT_DAILY_CRON = "* * * * *";
-export const PROCUREMENT_DAILY_CRON = "0 9 * * *";
+export const PROJECT_MANAGEMENT_REMINDERS_CRON = "* * * * *";
+export const PROJECT_MANAGEMENT_DAILY_CRON = "10 3 * * *";
+export const PROCUREMENT_DAILY_SUMMARY_CRON = "0 9 * * *";
+export const PROCUREMENT_DAILY_REMINDERS_CRON = "0 9 * * *";
 export const CRON_TIMEZONE = "Asia/Shanghai";
 
 export type CronJobHandlers = {
@@ -11,8 +13,10 @@ export type CronJobHandlers = {
   runNotificationOutboxDrainWithoutOverlap: () => Promise<unknown>;
   runUploadCleanupDrain: () => Promise<unknown>;
   runProcurementBudgetScan: () => Promise<unknown>;
+  runProjectManagementScheduledReminders: () => Promise<unknown>;
   runProjectManagementDailyMaintenance: () => Promise<unknown>;
-  runProcurementDaily: () => Promise<unknown>;
+  runProcurementDailySummary: () => Promise<unknown>;
+  runProcurementDailyReminders: () => Promise<unknown>;
 };
 
 export type CronJobDefinition = {
@@ -71,16 +75,28 @@ export function createCronJobDefinitions(
       "procurementBudgetCron",
     ),
     definition(
+      "runProjectManagementScheduledReminders",
+      PROJECT_MANAGEMENT_REMINDERS_CRON,
+      "cron.project_management_reminders.failed",
+      "projectManagementRemindersCron",
+    ),
+    definition(
       "runProjectManagementDailyMaintenance",
       PROJECT_MANAGEMENT_DAILY_CRON,
       "cron.project_management_daily.failed",
       "projectManagementDailyCron",
     ),
     definition(
-      "runProcurementDaily",
-      PROCUREMENT_DAILY_CRON,
-      "cron.procurement_daily.failed",
-      "procurementDailyCron",
+      "runProcurementDailySummary",
+      PROCUREMENT_DAILY_SUMMARY_CRON,
+      "cron.procurement_daily_summary.failed",
+      "procurementDailySummaryCron",
+    ),
+    definition(
+      "runProcurementDailyReminders",
+      PROCUREMENT_DAILY_REMINDERS_CRON,
+      "cron.procurement_daily_reminders.failed",
+      "procurementDailyRemindersCron",
     ),
   ];
 }

@@ -36,22 +36,36 @@ const expectedJobs = [
     "runProcurementBudgetScan",
   ],
   [
-    "runProjectManagementDailyMaintenance",
+    "runProjectManagementScheduledReminders",
     "* * * * *",
+    "projectManagementRemindersCron",
+    "cron.project_management_reminders.failed",
+    "runProjectManagementScheduledReminders",
+  ],
+  [
+    "runProjectManagementDailyMaintenance",
+    "10 3 * * *",
     "projectManagementDailyCron",
     "cron.project_management_daily.failed",
     "runProjectManagementDailyMaintenance",
   ],
   [
-    "runProcurementDaily",
+    "runProcurementDailySummary",
     "0 9 * * *",
-    "procurementDailyCron",
-    "cron.procurement_daily.failed",
-    "runProcurementDaily",
+    "procurementDailySummaryCron",
+    "cron.procurement_daily_summary.failed",
+    "runProcurementDailySummary",
+  ],
+  [
+    "runProcurementDailyReminders",
+    "0 9 * * *",
+    "procurementDailyRemindersCron",
+    "cron.procurement_daily_reminders.failed",
+    "runProcurementDailyReminders",
   ],
 ] as const;
 
-test("six cron schedules register the matching handler without retired segment transitions", async () => {
+test("eight cron schedules keep maintenance and procurement callbacks separate", async () => {
   const calls: string[] = [];
   const handlers = Object.fromEntries(
     expectedJobs.map(([name]) => [name, async () => void calls.push(name)]),
@@ -84,12 +98,49 @@ test("six cron schedules register the matching handler without retired segment t
     ]),
     expectedJobs,
   );
-  assert.equal(scheduled.length, 6);
+  assert.equal(scheduled.length, 8);
   assert.ok(definitions.every((job) => job.timezone === "Asia/Shanghai"));
   assert.ok(scheduled.every((job) => job.timezone === "Asia/Shanghai"));
   for (const job of scheduled) job.callback();
   await flushPromises();
   assert.deepEqual(calls, expectedJobs.map(([name]) => name));
+});
+
+test("procurement reminder callback runs when daily summary fails", async () => {
+  const calls: string[] = [];
+  const handlers = Object.fromEntries(
+    expectedJobs.map(([name]) => [name, async () => void calls.push(name)]),
+  ) as unknown as CronJobHandlers;
+  handlers.runProcurementDailySummary = async () => {
+    calls.push("runProcurementDailySummary");
+    throw new Error("summary unavailable");
+  };
+  const definitions = createCronJobDefinitions(handlers);
+  const callbacks: Array<() => void> = [];
+  const failures: string[] = [];
+  registerCronJobs(
+    definitions,
+    (_expression, callback) => callbacks.push(callback),
+    (definition) => failures.push(definition.failureEvent),
+  );
+
+  const summaryIndex = definitions.findIndex(
+    (job) => job.name === "runProcurementDailySummary",
+  );
+  const remindersIndex = definitions.findIndex(
+    (job) => job.name === "runProcurementDailyReminders",
+  );
+  assert.notEqual(summaryIndex, -1);
+  assert.notEqual(remindersIndex, -1);
+  callbacks[summaryIndex]?.();
+  callbacks[remindersIndex]?.();
+  await flushPromises();
+
+  assert.deepEqual(calls, [
+    "runProcurementDailySummary",
+    "runProcurementDailyReminders",
+  ]);
+  assert.deepEqual(failures, ["cron.procurement_daily_summary.failed"]);
 });
 
 test("cron callbacks report every exact failure event and action", async () => {
