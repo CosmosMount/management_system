@@ -516,7 +516,7 @@ export function TimeCanvas({
             : "md:grid-cols-1",
         )}
       >
-        <div className="relative min-w-0" data-testid="time-canvas-scroll-shell">
+        <div className={cn("relative min-w-0", markerOnlyCanvas && "pb-4")} data-testid="time-canvas-scroll-shell">
           <div
             ref={scrollElementRef}
             className={cn(
