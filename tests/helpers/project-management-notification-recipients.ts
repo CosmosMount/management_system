@@ -5,21 +5,24 @@ export async function expectedProjectManagementRecipients(
   originalRecipients: Array<{ account: { id: string }; openId: string | null }>,
   category: ProjectManagementNotificationCategory,
   mandatory = false,
+  includeSuperAdministrators = true,
 ) {
-  const administrators = await prisma.account.findMany({
-    where: {
-      person: { is: { status: "ACTIVE" } },
-      systemRoles: { some: { role: "SUPER_ADMINISTRATOR", team: "", techGroup: "", revokedAt: null } },
-    },
-    select: {
-      id: true,
-      identities: {
-        where: { provider: "FEISHU", tenantId: "default" },
-        select: { openId: true },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      },
-    },
-  });
+  const administrators = includeSuperAdministrators
+    ? await prisma.account.findMany({
+        where: {
+          person: { is: { status: "ACTIVE" } },
+          systemRoles: { some: { role: "SUPER_ADMINISTRATOR", team: "", techGroup: "", revokedAt: null } },
+        },
+        select: {
+          id: true,
+          identities: {
+            where: { provider: "FEISHU", tenantId: "default" },
+            select: { openId: true },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          },
+        },
+      })
+    : [];
   const recipients = new Map<string, string | null>();
   for (const administrator of administrators) {
     recipients.set(administrator.id, administrator.identities.find((identity) => identity.openId?.trim())?.openId?.trim() ?? null);

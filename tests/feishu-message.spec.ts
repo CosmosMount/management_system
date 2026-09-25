@@ -116,6 +116,7 @@ test.describe("统一飞书私信传输层", () => {
     });
     const messageCall = calls.find((call) => call.url.includes("/im/v1/messages"));
     expect(messageCall?.url).toContain("receive_id_type=open_id");
+    expect(messageCall?.init?.signal).toBeInstanceOf(AbortSignal);
     expect(messageCall?.init?.headers).toMatchObject({
       Authorization: "Bearer token-for-notification-app",
     });

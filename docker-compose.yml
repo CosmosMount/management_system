@@ -75,5 +75,27 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  feishu-approval-ws:
+    build: .
+    entrypoint: ["/entrypoint.sh"]
+    command: ["npx", "tsx", "scripts/feishu-ws.ts"]
+    environment:
+      <<: *app-environment
+      SKIP_DB_DEPLOY: "true"
+      RUN_DB_SEED: "false"
+      FEISHU_WS_BOT_KIND: approval
+      FEISHU_EVENT_ENCRYPT_KEY: ${FEISHU_EVENT_ENCRYPT_KEY:-}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_APPROVAL_EVENT_ENCRYPT_KEY: ${FEISHU_APPROVAL_EVENT_ENCRYPT_KEY:-}
+      FEISHU_APPROVAL_VERIFICATION_TOKEN: ${FEISHU_APPROVAL_VERIFICATION_TOKEN:-}
+    volumes:
+      - app-uploads:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      app:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   app-uploads:

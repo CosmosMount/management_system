@@ -243,7 +243,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
             where: { eventKey: { startsWith: eventPrefix } },
             select: { recipientAccountId: true },
           });
-          const expectedPerEvent = await Promise.all(expectedChangedPeople.map((person) => expectedProjectManagementRecipients([person], "TASK", true)));
+          const expectedPerEvent = await Promise.all(expectedChangedPeople.map((person) => expectedProjectManagementRecipients([person], "TASK", true, false)));
           expect(inAppRows.map((row) => row.recipientAccountId).sort()).toEqual(
             expectedPerEvent.flatMap((recipients) => recipients.accountIds).sort(),
           );

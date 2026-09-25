@@ -1317,6 +1317,69 @@ test.describe("Project 立项与生命周期", () => {
     expect(await prisma.projectEstablishmentRequest.count({ where: { projectId: created.projectId, status: "PENDING" } })).toBe(0);
   });
 
+  test("立项重提仅变更已有成员角色时不发送加入项目通知", async () => {
+    const requester = await actor(`Project 角色重提申请人 ${randomUUID()}`);
+    const admin = await actor(`Project 角色重提管理员 ${randomUUID()}`, "PROJECT_ADMINISTRATOR");
+    const participant = await actor(`Project 角色重提成员 ${randomUUID()}`);
+    const created = await createProject(requester, {
+      name: `Project 角色重提 ${randomUUID()}`,
+      description: "验证角色变更不会误发加入项目通知",
+      avatarPath: null,
+      members: [
+        { personId: requester.personId, role: "OWNER" },
+        { personId: participant.personId, role: "PARTICIPANT" },
+      ],
+      requestedTaskIds: [],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: request.id,
+      expectedLockVersion: 0,
+      decision: "REJECT",
+      comment: "需要补充角色分工",
+    });
+
+    const resubmitted = await resubmitProject(requester, {
+      projectId: created.projectId,
+      expectedLockVersion: 1,
+      name: `Project 角色重提 ${randomUUID()}`,
+      description: "已补充角色分工",
+      avatarPath: null,
+      members: [
+        { personId: requester.personId, role: "OWNER" },
+        { personId: participant.personId, role: "OWNER" },
+      ],
+      requestedTaskIds: [],
+      idempotencyKey: randomUUID(),
+    });
+    expect(resubmitted.status).toBe("PENDING_APPROVAL");
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: {
+            startsWith: `pm:project:${created.projectId}:member:`,
+          },
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.projectMember.findMany({
+        where: { projectId: created.projectId, removedAt: null },
+        select: { personId: true, role: true },
+        orderBy: { personId: "asc" },
+      }),
+    ).toEqual(
+      [
+        { personId: requester.personId, role: "OWNER" },
+        { personId: participant.personId, role: "OWNER" },
+      ].sort((left, right) => left.personId.localeCompare(right.personId)),
+    );
+  });
+
   test("立项提交先锁定审批人集合并与全局角色撤销无死锁串行化", async () => {
     const requester = await actor("Project 立项锁顺序申请人");
     const operator = await actor(

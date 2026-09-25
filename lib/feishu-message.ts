@@ -134,6 +134,7 @@ async function sendToTarget(
 
   const response = await fetch(url, {
     method: "POST",
+    signal: AbortSignal.timeout(15_000),
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       Authorization: `Bearer ${token}`,

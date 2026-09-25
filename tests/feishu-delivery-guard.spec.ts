@@ -367,6 +367,7 @@ test.describe("Feishu delivery safety guard", () => {
 
     expect(fetchCalls).toHaveLength(1);
     expect(String(fetchCalls[0]?.input)).toContain("/open-apis/bot/v2/hook/");
+    expect(fetchCalls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   test("CONFIRM_SEND_FEISHU alone does not bypass test delivery disable", async () => {

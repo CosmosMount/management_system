@@ -12,11 +12,8 @@ import {
 import { useRouter } from "next/navigation";
 import { useDetailViewActive } from "@/components/project-management/detail-views";
 import { getAdaptiveTimeCanvasBlock } from "@/app/actions/project-management/canvas";
-import {
-  getWorkSegment,
-  listWorkSegmentChanges,
-} from "@/app/actions/project-management/segments";
 import type { UserPickerScope } from "@/components/project-management/user-picker";
+import { useResourcePlannerInspector } from "@/components/project-management/resource-planner-inspector-state";
 import {
   ResourcePlannerCanvasView,
   type ResourcePlannerNotice,
@@ -46,7 +43,6 @@ import type {
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
 import type { ProjectManagementActionFailure, ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
-import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
 import type {
   PersonOptionDto,
   TaskOptionPage,
@@ -74,7 +70,6 @@ import {
 import {
   explicitRangeForDraft,
   type CreateDraft,
-  type SegmentChange,
 } from "@/components/project-management/resource-planner-panels";
 
 type TaskOption = TaskOptionPage["items"][number];
@@ -314,19 +309,6 @@ export function ResourcePlannerCanvasClient({
     useState<PendingSegmentRange | null>(null);
   const pendingSegmentRangeRef = useRef<PendingSegmentRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
-  const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
-  const [detailRange, setDetailRange] = useState<{ startMs: number; endMs: number } | null>(null);
-  const [changes, setChanges] = useState<SegmentChange[]>([]);
-  const [changesCursor, setChangesCursor] = useState<string | null>(null);
-  const [historyState, setHistoryState] = useState<
-    "IDLE" | "LOADING" | "READY" | "ERROR"
-  >(openSegmentId ? "LOADING" : "IDLE");
-  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
-  const [historyError, setHistoryError] = useState("");
-  const [historyRetryToken, setHistoryRetryToken] = useState(0);
-  const [detailRetryToken, setDetailRetryToken] = useState(0);
-  const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
-  const [detailError, setDetailError] = useState("");
   const [notice, setNotice] = useState<ResourcePlannerNotice>(null);
   const cacheClockRef = useRef(1);
   const rowPageKeyRef = useRef(initialModel.rowPageKey);
@@ -445,6 +427,13 @@ export function ResourcePlannerCanvasClient({
         : null,
     [model.segments, openSegmentId],
   );
+  const inspector = useResourcePlannerInspector({
+    segmentId: openSegmentId,
+    segment: selectedCanvasSegment,
+    isPending,
+    startTransition,
+  });
+  const resetInspector = inspector.reset;
   const canCreateSegment = allowCreate && model.rows.some(
     (row) => row.kind !== "PLAN" && row.editable,
   );
@@ -661,16 +650,8 @@ export function ResourcePlannerCanvasClient({
       : null;
     setOpenSegmentId(focusedSegment?.id ?? null);
     updateDialogDirty(false);
-    setDetail(null);
-    setDetailRange(null);
-    setChanges([]);
-    setChangesCursor(null);
-    setHistoryState(focusedSegment ? "LOADING" : "IDLE");
-    setHistoryLoadingMore(false);
-    setHistoryError("");
-    setDetailError("");
-    setDetailState(focusedSegment ? "LOADING" : "IDLE");
-  }, [effectiveInitialSelection, initialCenterMs, initialModel, persistViewportInUrl, updateDialogDirty]);
+    resetInspector(Boolean(focusedSegment));
+  }, [effectiveInitialSelection, initialCenterMs, initialModel, persistViewportInUrl, resetInspector, updateDialogDirty]);
   useEffect(() => {
     if (
       dialogDirty ||
@@ -755,15 +736,7 @@ export function ResourcePlannerCanvasClient({
       }
       setOpenSegmentId(focusedSegment?.id ?? null);
       updateDialogDirty(false);
-      setDetail(null);
-      setDetailRange(null);
-      setChanges([]);
-      setChangesCursor(null);
-      setHistoryState(focusedSegment ? "LOADING" : "IDLE");
-      setHistoryLoadingMore(false);
-      setHistoryError("");
-      setDetailError("");
-      setDetailState(focusedSegment ? "LOADING" : "IDLE");
+      resetInspector(Boolean(focusedSegment));
     }, 0);
     return () => window.clearTimeout(timer);
   }, [
@@ -777,6 +750,7 @@ export function ResourcePlannerCanvasClient({
     initialFocusRevision,
     initialModel,
     initialSelection,
+    resetInspector,
     updateDialogDirty,
   ]);
   useEffect(() => {
@@ -1124,81 +1098,6 @@ export function ResourcePlannerCanvasClient({
     if (pendingSegmentRangeRef.current ?? pendingSegmentRange) return;
     segmentMutationViewportCenterRef.current = null;
   }, [pendingSegmentRange]);
-  useEffect(() => {
-    let active = true;
-    if (
-      !openSegmentId ||
-      !selectedCanvasSegment ||
-      selectedCanvasSegment.visibility !== "FULL"
-    ) {
-      return () => {
-        active = false;
-      };
-    }
-    void getWorkSegment({ segmentId: openSegmentId })
-      .then((detailResult) => {
-        if (!active) return;
-        if (!detailResult.ok) {
-          setDetail(null);
-          setDetailError(detailResult.error.message);
-          setDetailState("ERROR");
-          return;
-        }
-        const detailData = detailResult.data;
-        setDetail(detailData);
-        setDetailRange({
-          startMs: Date.parse(detailData.startAt),
-          endMs: Date.parse(detailData.endAt),
-        });
-        setDetailState("READY");
-      })
-      .catch(() => {
-        if (!active) return;
-        setDetail(null);
-        setDetailError("网络异常，请稍后重试。");
-        setDetailState("ERROR");
-      });
-    return () => {
-      active = false;
-    };
-  }, [detailRetryToken, openSegmentId, selectedCanvasSegment]);
-  useEffect(() => {
-    let active = true;
-    if (
-      !openSegmentId ||
-      !selectedCanvasSegment ||
-      selectedCanvasSegment.visibility !== "FULL"
-    ) {
-      return () => {
-        active = false;
-      };
-    }
-    void listWorkSegmentChanges({ segmentId: openSegmentId, limit: 20 })
-      .then((historyResult) => {
-        if (!active) return;
-        if (!historyResult.ok) {
-          setChanges([]);
-          setChangesCursor(null);
-          setHistoryState("ERROR");
-          setHistoryError(historyResult.error.message);
-          return;
-        }
-        setChanges(historyResult.data.items);
-        setChangesCursor(historyResult.data.nextCursor);
-        setHistoryState("READY");
-        setHistoryError("");
-      })
-      .catch(() => {
-        if (!active) return;
-        setChanges([]);
-        setChangesCursor(null);
-        setHistoryState("ERROR");
-        setHistoryError("网络异常，请稍后重试。");
-      });
-    return () => {
-      active = false;
-    };
-  }, [historyRetryToken, openSegmentId, selectedCanvasSegment]);
   const runMutation = (
       action: () => Promise<ProjectManagementActionResult<unknown>>,
       successMessage: string,
@@ -1239,17 +1138,7 @@ export function ResourcePlannerCanvasClient({
           });
           if (stale) {
             updateDialogDirty(false);
-            setDetail(null);
-            setDetailRange(null);
-            setDetailError("");
-            setDetailState("LOADING");
-            setChanges([]);
-            setChangesCursor(null);
-            setHistoryState("LOADING");
-            setHistoryLoadingMore(false);
-            setHistoryError("");
-            setDetailRetryToken((current) => current + 1);
-            setHistoryRetryToken((current) => current + 1);
+            inspector.refreshStale();
             staleRefreshFocusRef.current = openSegmentId;
             router.refresh();
           }
@@ -1298,37 +1187,6 @@ export function ResourcePlannerCanvasClient({
         }
       });
   };
-
-  function loadMoreChanges() {
-    if (!openSegmentId || !changesCursor || isPending || historyLoadingMore) return;
-    setHistoryLoadingMore(true);
-    setHistoryError("");
-    startTransition(async () => {
-      try {
-        const result = await listWorkSegmentChanges({
-          segmentId: openSegmentId,
-          cursor: changesCursor,
-          limit: 20,
-        });
-        if (!result.ok) {
-          setHistoryState("ERROR");
-          setHistoryError(result.error.message);
-          return;
-        }
-        setChanges((current) => {
-          const seen = new Set(current.map((change) => change.key));
-          return [...current, ...result.data.items.filter((change) => !seen.has(change.key))];
-        });
-        setChangesCursor(result.data.nextCursor);
-        setHistoryState("READY");
-      } catch {
-        setHistoryState("ERROR");
-        setHistoryError("网络异常，请稍后重试。");
-      } finally {
-        setHistoryLoadingMore(false);
-      }
-    });
-  }
 
   function handleBrush(request: TimeCanvasBrushRequest) {
     if (isPending) return;
@@ -1563,15 +1421,7 @@ export function ResourcePlannerCanvasClient({
             setSelection({ kind: "SEGMENT", id: segmentId });
             setOpenSegmentId(segmentId);
             updateDialogDirty(false);
-            setDetail(null);
-            setDetailRange(null);
-            setChanges([]);
-            setChangesCursor(null);
-            setHistoryState("LOADING");
-            setHistoryLoadingMore(false);
-            setHistoryError("");
-            setDetailError("");
-            setDetailState("LOADING");
+            inspector.reset(true);
           },
           onRowNavigation: () =>
             !createDraftDirty || window.confirm("创建内容尚未保存，确认放弃？"),
@@ -1617,43 +1467,31 @@ export function ResourcePlannerCanvasClient({
           if (dialogDirty && !window.confirm("有未保存修改，确认放弃并关闭？")) return;
           closeSegmentDialog();
         },
-        inspectorKey: `${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`,
+        inspectorKey: `${selectedCanvasSegment?.id ?? "none"}:${inspector.detail?.updatedAt ?? inspector.detailState}`,
         inspectorProps: {
           canvasSegment: selectedCanvasSegment,
           model,
           initialZoom: currentZoom,
           initialCenterMs: (viewportRange.startMs + viewportRange.endMs) / 2,
-          detail,
-          detailRange,
-          detailState,
-          detailError,
-          changes,
-          historyState,
-          historyLoadingMore,
-          historyError,
-          hasMoreChanges: Boolean(changesCursor),
+          detail: inspector.detail,
+          detailRange: inspector.detailRange,
+          detailState: inspector.detailState,
+          detailError: inspector.detailError,
+          changes: inspector.changes,
+          historyState: inspector.historyState,
+          historyLoadingMore: inspector.historyLoadingMore,
+          historyError: inspector.historyError,
+          hasMoreChanges: inspector.hasMoreChanges,
           disabled: isPending,
           onRun: runMutation,
-          onRetryDetail: () => {
-            setDetailError("");
-            setDetailState("LOADING");
-            setDetailRetryToken((current) => current + 1);
-          },
-          onLoadMoreChanges: loadMoreChanges,
-          onRetryHistory: () => {
-            if (changes.length > 0 && changesCursor) {
-              loadMoreChanges();
-              return;
-            }
-            setHistoryState("LOADING");
-            setHistoryError("");
-            setHistoryRetryToken((current) => current + 1);
-          },
+          onRetryDetail: inspector.retryDetail,
+          onLoadMoreChanges: inspector.loadMoreChanges,
+          onRetryHistory: inspector.retryHistory,
           onDirtyChange: updateDialogDirty,
           onTaskNavigation: () =>
             !dialogDirty || window.confirm("当前投入有未保存修改，确认放弃并离开？"),
           onRangeChange: (range) => {
-            setDetailRange(range);
+            inspector.setDetailRange(range);
             updateDialogDirty(true);
           },
         },

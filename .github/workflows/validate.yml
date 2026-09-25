@@ -1,0 +1,50 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: management_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d management_ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/management_ci_test
+      AUTH_SECRET: ci-placeholder-not-used-outside-this-job
+      FEISHU_APP_ID: ci-placeholder-app
+      FEISHU_APP_SECRET: ci-placeholder-secret
+      FEISHU_NOTIFICATION_APP_ID: ci-placeholder-notification-app
+      FEISHU_NOTIFICATION_APP_SECRET: ci-placeholder-notification-secret
+      FEISHU_APPROVAL_APP_ID: ci-placeholder-approval-app
+      FEISHU_APPROVAL_APP_SECRET: ci-placeholder-approval-secret
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3003
+      APP_ALLOWED_ORIGINS: http://127.0.0.1:3003
+      NOTIFICATION_DELIVERY_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm run test:playwright-db-lifecycle
+      - run: npm run test:playwright-db-safety
+      - run: npm run test:e2e
+      - run: npm run db:deploy
+      - run: npm run build

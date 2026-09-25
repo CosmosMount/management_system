@@ -32,28 +32,39 @@ const CONTACT_SYNC_CRON =
 let contactSyncRunning = false;
 let budgetScanRunning = false;
 let projectManagementDailyRunning = false;
+let projectManagementRemindersRunning = false;
 
-async function runProcurementDaily() {
-  const orders = await prisma.purchaseOrder.findMany({
+async function runProcurementDailySummary() {
+  const ordersByStatusRows = await prisma.purchaseOrder.groupBy({
+    by: ["status"],
     where: {
       status: { notIn: [OrderStatus.COMPLETED, OrderStatus.REJECTED] },
     },
-    select: { status: true },
+    _count: { _all: true },
   });
 
   const ordersByStatus: Partial<Record<OrderStatus, number>> = {};
-  for (const order of orders) {
-    ordersByStatus[order.status] = (ordersByStatus[order.status] ?? 0) + 1;
+  let openOrderCount = 0;
+  for (const row of ordersByStatusRows) {
+    ordersByStatus[row.status] = row._count._all;
+    openOrderCount += row._count._all;
   }
 
   await sendFeishuDailySummary(ordersByStatus);
 
-  const reminded = await runProcurementStaleReminders();
-  logger.info("cron.procurement_daily.completed", {
+  logger.info("cron.procurement_daily_summary.completed", {
     module: "cron",
-    action: "runProcurementDaily",
-    openOrderCount: orders.length,
-    remindedCount: reminded,
+    action: "runProcurementDailySummary",
+    openOrderCount,
+  });
+}
+
+async function runProcurementDailyReminders() {
+  const remindedCount = await runProcurementStaleReminders();
+  logger.info("cron.procurement_daily_reminders.completed", {
+    module: "cron",
+    action: "runProcurementDailyReminders",
+    remindedCount,
   });
 }
 
@@ -161,12 +172,11 @@ async function runProjectManagementDailyMaintenance() {
   projectManagementDailyRunning = true;
   try {
     const locked = await runLockedProjectManagementDaily(async () => {
-      const [deadlines, retention, integrity] = await Promise.all([
-        runConfiguredProjectManagementReminders(),
+      const [retention, integrity] = await Promise.all([
         runProjectManagementNotificationRetention(),
         runProjectManagementIntegrityScan(),
       ]);
-      return { deadlines, retention, integrity };
+      return { retention, integrity };
     });
     if (!locked.acquired) {
       logger.warn("cron.project_management_daily.skipped_database_lock", {
@@ -176,16 +186,37 @@ async function runProjectManagementDailyMaintenance() {
       });
       return;
     }
-    const { deadlines, retention, integrity } = locked.result;
+    const { retention, integrity } = locked.result;
     logger.info("cron.project_management_daily.completed", {
       module: "cron",
       action: "runProjectManagementDailyMaintenance",
-      ...deadlines,
       ...retention,
       integrityViolationCount: integrity.violationCount,
     });
   } finally {
     projectManagementDailyRunning = false;
+  }
+}
+
+async function runProjectManagementScheduledReminders() {
+  if (projectManagementRemindersRunning) {
+    logger.warn("cron.project_management_reminders.skipped_running", {
+      module: "cron",
+      action: "runProjectManagementScheduledReminders",
+      result: "skipped",
+    });
+    return;
+  }
+  projectManagementRemindersRunning = true;
+  try {
+    const result = await runConfiguredProjectManagementReminders();
+    logger.info("cron.project_management_reminders.completed", {
+      module: "cron",
+      action: "runProjectManagementScheduledReminders",
+      ...result,
+    });
+  } finally {
+    projectManagementRemindersRunning = false;
   }
 }
 
@@ -195,8 +226,10 @@ const cronJobs = createCronJobDefinitions(
     runNotificationOutboxDrainWithoutOverlap,
     runUploadCleanupDrain,
     runProcurementBudgetScan,
+    runProjectManagementScheduledReminders,
     runProjectManagementDailyMaintenance,
-    runProcurementDaily,
+    runProcurementDailySummary,
+    runProcurementDailyReminders,
   },
   CONTACT_SYNC_CRON,
 );

@@ -156,14 +156,21 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await gate.getByRole("button", { name: "催促审批", exact: true }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toBeVisible();
+      await dialog.getByLabel("清空审批催促提醒对象", { exact: true }).click();
+      const recipientInput = dialog.getByLabel("审批催促提醒对象", { exact: true });
+      await recipientInput.fill(secondAdministrator.person.displayName);
+      const secondOption = page.getByRole("option", {
+        name: secondAdministrator.person.displayName,
+        exact: true,
+      });
+      await expect(secondOption).toBeVisible();
+      await secondOption.click();
       await expect(
         dialog.getByLabel(`移除${secondAdministrator.person.displayName}`, {
           exact: true,
         }),
       ).toBeVisible();
-
       await dialog.getByLabel("清空审批催促提醒对象", { exact: true }).click();
-      const recipientInput = dialog.getByLabel("审批催促提醒对象", { exact: true });
       await recipientInput.fill(fixture.admin.person.displayName);
       const option = page.getByRole("option", {
         name: fixture.admin.person.displayName,
@@ -2535,7 +2542,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         const start = Number(await canvasRoot.getAttribute("data-range-start-ms"));
         const end = Number(await canvasRoot.getAttribute("data-range-end-ms"));
         return start <= now && now < end;
-      }).toBe(true);
+      }, { timeout: 15_000 }).toBe(true);
       await expect.poll(async () => {
         const now = Date.now();
         return (await canvasRoot.getAttribute("data-loaded-ranges"))
@@ -2544,7 +2551,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
             const [start, end] = value.split(":").map(Number);
             return start <= now && now < end;
           }) ?? false;
-      }).toBe(true);
+      }, { timeout: 15_000 }).toBe(true);
       await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
       await expect.poll(() => new URL(page.url()).searchParams.get("scale"))
         .toBe("month");

@@ -82,6 +82,13 @@ export const orderOutboxPayloadSchema = z.discriminatedUnion("kind", [
     budget: budgetSchema,
     appOrigin: appOriginSchema,
   }),
+  z.object({
+    kind: z.literal("scheduled_reminder"),
+    orderId: z.string().min(1),
+    expectedStatus: procurementOrderPayloadSchema.shape.status,
+    expectedStatusEnteredAt: z.string().datetime(),
+    appOrigin: appOriginSchema,
+  }),
 ]);
 
 export const teacherReviewEmailOutboxPayloadSchema = z.object({
@@ -123,6 +130,13 @@ export type OrderOutboxPayload =
   | {
       kind: "budget_threshold";
       budget: BudgetThresholdPayload;
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "scheduled_reminder";
+      orderId: string;
+      expectedStatus: OrderCardPayload["status"];
+      expectedStatusEnteredAt: string;
       appOrigin?: string | null;
     };
 

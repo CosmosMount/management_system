@@ -13,6 +13,7 @@ import {
 } from "@/lib/file-upload";
 import { isImagePath } from "@/lib/image-path";
 import { logger } from "@/lib/logger";
+import { fetchFeishu } from "@/lib/feishu-http";
 
 async function readLocalUpload(
   publicPath: string,
@@ -94,11 +95,11 @@ export async function uploadFeishuMessageImage(
   );
 
   const token = await getFeishuTenantAccessTokenByBotKind(botKind);
-  const res = await fetch("https://open.feishu.cn/open-apis/im/v1/images", {
+  const res = await fetchFeishu("https://open.feishu.cn/open-apis/im/v1/images", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
-  });
+  }, 30_000);
 
   const data = (await res.json()) as {
     code?: number;
@@ -152,11 +153,11 @@ export async function uploadFeishuMessageFile(
   );
 
   const token = await getFeishuTenantAccessTokenByBotKind(botKind);
-  const res = await fetch("https://open.feishu.cn/open-apis/im/v1/files", {
+  const res = await fetchFeishu("https://open.feishu.cn/open-apis/im/v1/files", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
-  });
+  }, 30_000);
 
   const data = (await res.json()) as {
     code?: number;

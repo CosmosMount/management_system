@@ -158,8 +158,8 @@ test.describe("project management plan mutations project-management-plan-mutatio
           },
         }),
       ).toBe(
-        (await expectedProjectManagementRecipients([reviewer], "TASK", true)).accountIds.length +
-        (await expectedProjectManagementRecipients([newcomer], "TASK", true)).accountIds.length,
+        (await expectedProjectManagementRecipients([reviewer], "TASK", true, false)).accountIds.length +
+        (await expectedProjectManagementRecipients([newcomer], "TASK", true, false)).accountIds.length,
       );
       expect(
         await prisma.notificationOutbox.count({
@@ -503,7 +503,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         select: { recipientAccountId: true, linkPath: true },
       });
       expect(memberNotifications.sort((left, right) => left.recipientAccountId.localeCompare(right.recipientAccountId))).toEqual(
-        (await expectedProjectManagementRecipients([newcomer], "TASK", true)).accountIds.map((recipientAccountId) => ({
+        (await expectedProjectManagementRecipients([newcomer], "TASK", true, false)).accountIds.map((recipientAccountId) => ({
           recipientAccountId,
           linkPath: `/progress/tasks/${fixture.taskId}`,
         })),
@@ -789,7 +789,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(payloadByPersonId.get(firstBlankThenValid.person.id)).toMatchObject({
         context: { recipientResolution: "RESOLVED" },
       });
-      const administrators = await expectedProjectManagementRecipients([], "TASK", true);
+      const administrators = await expectedProjectManagementRecipients([], "TASK", true, false);
       for (const [personId, payload] of payloadByPersonId) {
         const memberOpenIds = personId === bound.person.id ? [bound.openId] : personId === firstBlankThenValid.person.id ? [laterValidOpenId] : [];
         expect((payload.recipientOpenIds as string[]).slice().sort()).toEqual([...new Set([...memberOpenIds, ...administrators.openIds])].sort());

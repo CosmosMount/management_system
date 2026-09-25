@@ -73,7 +73,7 @@ export async function drainAggregatedNotificationBatches(
           adapter.sendAggregatedToRecipient!(
             recipients.map((recipient) => recipient.outbox),
             batch.recipientOpenId,
-            { batchId: batch.id, category: batch.category },
+            { batchId: batch.id, category: batch.category, claim },
           ),
       );
       if (

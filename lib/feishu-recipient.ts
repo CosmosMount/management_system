@@ -7,6 +7,7 @@ import {
 } from "@/lib/feishu-app-config";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import { fetchFeishu } from "@/lib/feishu-http";
 
 export type FeishuReceiveIdType = "open_id" | "union_id";
 
@@ -49,7 +50,7 @@ async function fetchUnionIdByOpenId(
   url.searchParams.set("user_id_type", "open_id");
   url.searchParams.set("department_id_type", "open_department_id");
 
-  const res = await fetch(url, {
+  const res = await fetchFeishu(url, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
@@ -137,7 +138,7 @@ async function fetchSystemOpenIdByUnionId(
   url.searchParams.set("user_id_type", "union_id");
   url.searchParams.set("department_id_type", "open_department_id");
 
-  const res = await fetch(url, {
+  const res = await fetchFeishu(url, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });

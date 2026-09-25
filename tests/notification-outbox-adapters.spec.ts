@@ -13,12 +13,14 @@ import {
 import { MAX_NOTIFICATION_ATTEMPTS } from "../lib/notification-outbox/constants";
 import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
+import { procurementNotificationChannel } from "../lib/notification-channels/procurement";
 import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import { projectManagementNotificationPayloadSchema, type ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 import { enqueueProjectManagementNotification, enqueueProjectManagementNotificationTx } from "../lib/project-management/notifications/events";
 import { runProjectManagementNotificationRetention } from "../lib/project-management/application/maintenance-service";
 import { prisma } from "../lib/prisma";
+import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
 const EVENT_PREFIX = "playwright:notification-adapter:";
@@ -196,12 +198,22 @@ test.describe("notification outbox channel adapters", () => {
     await prisma.procurementFeishuCard.deleteMany({
       where: { orderId: { startsWith: "outbox-adapter-order-" } },
     });
+    await prisma.purchaseOrder.deleteMany({
+      where: { id: { startsWith: "outbox-adapter-order-reminder-" } },
+    });
+    await prisma.userRole.deleteMany({
+      where: {
+        openId: { in: ["ou_outbox_success", "ou_outbox_retry"] },
+        role: "TEAM_ADMIN",
+        team: "通用",
+      },
+    });
     await prisma.userRole.deleteMany({
       where: { openId: "ou_outbox_approver" },
     });
     await prisma.user.deleteMany({
       where: {
-        openId: { in: ["ou_outbox_approver", "ou_outbox_link_approval"] },
+        openId: { in: ["ou_outbox_approver", "ou_outbox_link_approval", "ou_outbox_success", "ou_outbox_retry"] },
       },
     });
   });
@@ -931,6 +943,109 @@ test.describe("notification outbox channel adapters", () => {
     expect(sendAttempts).toEqual([]);
   });
 
+  test("定时催办并发扫描只入队一次，失败收件人重试不重发已成功者", async () => {
+    const orderId = `outbox-adapter-order-reminder-${randomUUID()}`;
+    const team = "通用";
+    const initiator = await resolveFeishuIdentityForUser({
+      openId: "ou_outbox_approver",
+      unionId: "on_outbox_approver",
+      name: "测试采购人",
+    });
+    const user = await prisma.user.upsert({
+      where: { openId: "ou_outbox_approver" },
+      update: { accountId: initiator.account.id, name: "测试采购人" },
+      create: {
+        accountId: initiator.account.id,
+        openId: "ou_outbox_approver",
+        name: "测试采购人",
+      },
+    });
+    for (const openId of ["ou_outbox_success", "ou_outbox_retry"]) {
+      const identity = await prisma.accountIdentity.findUniqueOrThrow({
+        where: {
+          provider_tenantId_openId: {
+            provider: "FEISHU",
+            tenantId: "default",
+            openId,
+          },
+        },
+      });
+      await prisma.user.upsert({
+        where: { openId },
+        update: { unionId: `on_outbox_${openId === "ou_outbox_success" ? "success" : "retry"}` },
+        create: {
+          accountId: identity.accountId,
+          openId,
+          unionId: `on_outbox_${openId === "ou_outbox_success" ? "success" : "retry"}`,
+          name: `测试催办收件人 ${openId}`,
+        },
+      });
+      await prisma.userRole.create({
+        data: { accountId: identity.accountId, openId, role: "TEAM_ADMIN", team },
+      });
+    }
+    const enteredAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await prisma.purchaseOrder.create({
+      data: {
+        id: orderId,
+        orderNo: `PW-REMINDER-${randomUUID()}`,
+        initiatorId: user.id,
+        initiatorName: user.name,
+        team,
+        techGroup: "测试技术组",
+        totalPrice: 42,
+        status: "MANAGEMENT_REVIEW",
+        statusEnteredAt: enteredAt,
+        techGroupApproved: true,
+        items: { create: [{ name: "测试物料", spec: "测试规格", quantity: 1, unitPrice: 42 }] },
+      },
+    });
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+    const scanCounts = await Promise.all([
+      runProcurementStaleReminders(),
+      runProcurementStaleReminders(),
+    ]);
+    expect(scanCounts.reduce((total, count) => total + count, 0)).toBe(1);
+    const [outbox] = await prisma.notificationOutbox.findMany({
+      where: { channel: "procurement", type: "scheduled_reminder", eventKey: { contains: orderId } },
+    });
+    expect(outbox).toBeTruthy();
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).lastReminderAt).not.toBeNull();
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
+    process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
+    process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "on_outbox_success,on_outbox_retry";
+    failRecipientOnce = "on_outbox_retry";
+    await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true });
+    const first = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { id: outbox.id },
+      include: { recipients: true },
+    });
+    expect(first.recipients).toEqual(expect.arrayContaining([
+      expect.objectContaining({ openId: "ou_outbox_success", status: "SENT" }),
+      expect.objectContaining({ openId: "ou_outbox_retry", status: "FAILED" }),
+    ]));
+    expect(await resetNotificationOutboxForRetry({ id: outbox.id, channel: "procurement", type: "scheduled_reminder" })).toEqual({ count: 1 });
+    sendAttempts = [];
+    expect(await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true })).toBe(1);
+    expect(sendAttempts).toEqual(["on_outbox_retry"]);
+    await prisma.userRole.updateMany({
+      where: { openId: "ou_outbox_retry", role: "TEAM_ADMIN", team, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    sendAttempts = [];
+    await expect(procurementNotificationChannel.sendToRecipient(outbox, "ou_outbox_retry"))
+      .rejects.toThrow("收件人不再负责本次催办环节");
+    expect(sendAttempts).toEqual([]);
+    await prisma.purchaseOrder.update({
+      where: { id: orderId },
+      data: { status: "TEACHER_REVIEW", statusEnteredAt: new Date() },
+    });
+    expect(await procurementNotificationChannel.resolveRecipientPlan(outbox)).toMatchObject({
+      cancelReason: "订单已离开本次催办环节",
+    });
+  });
+
   test("采购审批选择审批机器人并保留完整卡片和 CardKit 跟踪", async () => {
     const eventKey = `${EVENT_PREFIX}approval-positive-routing`;
     const orderId = "outbox-adapter-order-approval-routing";
@@ -1207,6 +1322,210 @@ test.describe("notification outbox channel adapters", () => {
       status: "SENT",
       receiveIdType: "open_id",
     });
+  });
+
+  test("历史 task_assigned outbox 会取消无关超级管理员并保留实际成员投递", async () => {
+    const targetOpenId = `ou_membership_target_${randomUUID()}`;
+    const unrelatedOpenId = `ou_membership_admin_${randomUUID()}`;
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = [
+      process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS,
+      targetOpenId,
+      unrelatedOpenId,
+    ].filter(Boolean).join(",");
+    const targetIdentity = await resolveFeishuIdentityForUser({
+      openId: targetOpenId,
+      unionId: null,
+      name: "历史成员通知实际成员",
+    });
+    const unrelatedIdentity = await resolveFeishuIdentityForUser({
+      openId: unrelatedOpenId,
+      unionId: null,
+      name: "历史成员通知无关超级管理员",
+    });
+    const creatorAccountId = await ensureRevisionFixtureAdministratorAccount();
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: unrelatedIdentity.account.id,
+        role: "SUPER_ADMINISTRATOR",
+      },
+    });
+    const taskId = randomUUID();
+    const planVersionId = randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+      await tx.task.create({
+        data: {
+          id: taskId,
+          title: "历史成员通知任务",
+          status: "ACTIVE",
+          currentPlanVersionId: planVersionId,
+          createdByAccountId: creatorAccountId,
+          startedAt: new Date(),
+        },
+      });
+      await tx.taskPlanVersion.create({
+        data: {
+          id: planVersionId,
+          taskId,
+          versionNo: 1,
+          status: "CURRENT",
+          reason: "历史成员通知回归夹具",
+          createdByAccountId: creatorAccountId,
+          activatedAt: new Date(),
+        },
+      });
+      await tx.taskMember.create({
+        data: {
+          taskId,
+          personId: targetIdentity.person.id,
+          role: "PARTICIPANT",
+          createdByAccountId: creatorAccountId,
+        },
+      });
+    });
+    revisionFixtureTaskIds.push(taskId);
+
+    const eventKey = `${EVENT_PREFIX}legacy-task-assigned-recipient-filter`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "task_assigned",
+      payload: projectManagementPayload({
+        kind: "task_assigned",
+        category: "TASK",
+        entityType: "Task",
+        entityId: taskId,
+        taskId,
+        taskTitle: "历史成员通知任务",
+        mandatory: true,
+        recipientOpenIds: [targetOpenId, unrelatedOpenId],
+        context: { affectedPersonId: targetIdentity.person.id },
+      }),
+    });
+    const queued = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+    });
+    await prisma.notificationOutboxRecipient.createMany({
+      data: [targetOpenId, unrelatedOpenId].map((openId) => ({
+        outboxId: queued.id,
+        openId,
+      })),
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual([targetOpenId]);
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: { orderBy: { openId: "asc" } } },
+    });
+    expect(row.status).toBe("SENT");
+    expect(row.recipients).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ openId: targetOpenId, status: "SENT" }),
+        expect.objectContaining({
+          openId: unrelatedOpenId,
+          status: "CANCELED",
+        }),
+      ]),
+    );
+  });
+
+  test("历史 project_member_added 聚合批次会逐事件取消无资格收件人", async () => {
+    process.env.PROJECT_MANAGEMENT_NOTIFICATION_AGGREGATION_WINDOW_SECONDS =
+      "30";
+    const targetIdentity = await accountAndPersonForOpenId("ou_outbox_success");
+    const unrelatedIdentity = await accountAndPersonForOpenId("ou_outbox_wrong_bot");
+    const project = await prisma.project.create({
+      data: {
+        name: "历史项目成员通知项目",
+        description: "历史成员通知聚合回归夹具",
+        status: "ACTIVE",
+        requesterAccountId: unrelatedIdentity.accountId,
+        members: {
+          create: {
+            personId: targetIdentity.personId,
+            role: "PARTICIPANT",
+            createdByAccountId: unrelatedIdentity.accountId,
+          },
+        },
+      },
+    });
+    const validEventKey = `${EVENT_PREFIX}legacy-project-member-valid`;
+    const invalidEventKey = `${EVENT_PREFIX}legacy-project-member-invalid`;
+    const recipientOpenIds = ["ou_outbox_success", "ou_outbox_wrong_bot"];
+    await enqueueProjectManagementNotification({
+      eventKey: validEventKey,
+      type: "project_member_added",
+      payload: projectManagementPayload({
+        kind: "project_member_added",
+        category: "PROJECT",
+        entityType: "ProjectMember",
+        entityId: targetIdentity.personId,
+        projectId: project.id,
+        projectName: project.name,
+        title: "你已被加入项目",
+        summary: `你已加入项目「${project.name}」`,
+        recipientOpenIds,
+      }),
+    });
+    await enqueueProjectManagementNotification({
+      eventKey: invalidEventKey,
+      type: "project_member_added",
+      payload: projectManagementPayload({
+        kind: "project_member_added",
+        category: "PROJECT",
+        entityType: "ProjectMember",
+        entityId: unrelatedIdentity.personId,
+        projectId: project.id,
+        projectName: project.name,
+        title: "你已被加入项目",
+        summary: `你已加入项目「${project.name}」`,
+        recipientOpenIds,
+      }),
+    });
+
+    const outboxes = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { in: [validEventKey, invalidEventKey] } },
+      include: { recipients: true },
+    });
+    const batchIds = outboxes
+      .flatMap((outbox) => outbox.recipients.map((recipient) => recipient.deliveryBatchId))
+      .filter((id): id is string => Boolean(id));
+    expect(new Set(batchIds).size).toBe(2);
+    await prisma.notificationDeliveryBatch.updateMany({
+      where: { id: { in: [...new Set(batchIds)] } },
+      data: { nextRunAt: new Date(0) },
+    });
+
+    try {
+      expect(
+        await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+      ).toBe(1);
+      expect(sendAttempts).toEqual(["ou_outbox_success"]);
+      const completed = await prisma.notificationOutbox.findMany({
+        where: { eventKey: { in: [validEventKey, invalidEventKey] } },
+        include: { recipients: { orderBy: { openId: "asc" } } },
+        orderBy: { eventKey: "asc" },
+      });
+      expect(completed[0]).toMatchObject({ status: "CANCELED" });
+      expect(completed[1]).toMatchObject({ status: "SENT" });
+      expect(completed[0]?.recipients).toMatchObject([
+        { openId: "ou_outbox_success", status: "CANCELED" },
+        { openId: "ou_outbox_wrong_bot", status: "CANCELED" },
+      ]);
+      expect(completed[1]?.recipients).toMatchObject([
+        { openId: "ou_outbox_success", status: "SENT" },
+        { openId: "ou_outbox_wrong_bot", status: "CANCELED" },
+      ]);
+    } finally {
+      await prisma.projectMember.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.project.deleteMany({ where: { id: project.id } });
+    }
   });
 
   test("项目管理普通通知按收件人和类别并发聚合，单条批次保持原卡片", async () => {
@@ -3063,6 +3382,19 @@ function projectManagementButton(
     throw new Error("测试期望项目管理卡片详情按钮 URL 与文案");
   }
   return { url: button.url, text: button.text.content };
+}
+
+async function accountAndPersonForOpenId(openId: string) {
+  const account = await prisma.account.findFirstOrThrow({
+    where: {
+      identities: {
+        some: { provider: "FEISHU", tenantId: "default", openId },
+      },
+    },
+    select: { id: true, person: { select: { id: true } } },
+  });
+  if (!account.person) throw new Error(`测试账号缺少 Person: ${openId}`);
+  return { accountId: account.id, personId: account.person.id };
 }
 
 async function ensureActiveFeishuRecipient(openId: string) {

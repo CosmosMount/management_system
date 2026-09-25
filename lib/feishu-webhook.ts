@@ -37,6 +37,7 @@ export async function postToFeishuWebhook(
 
   const res = await fetch(webhookUrl, {
     method: "POST",
+    signal: AbortSignal.timeout(15_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
