@@ -49,21 +49,13 @@
 
 当前节点到期展示由 `current-node-deadline.node.ts` 覆盖准确截止时刻、72 小时边界、里程碑指针优先/结束节点回退、终态与非法数据排除和预览排序；`current-node-deadline.spec.ts` 核对各授权读模型及画布适配的一致性、历史/候选计划隔离、等待审批的当前节点和非当前审批排除；`current-node-deadline-ui.spec.ts` 在 desktop 覆盖超过六项的完整任务表与版本列、风险排序、分钟更新与 focus 恢复、任务/项目/待办/选择器/各种画布、只读人员时间线、终态与无横向溢出。定向验证使用 `npm run test:e2e -- tests/current-node-deadline.spec.ts tests/current-node-deadline-ui.spec.ts`，由官方 runner 创建隔离数据库并保留飞书禁发保护；Node 用例通过 `npm run test:node` 执行。跨模块交付仍需本节既有完整门禁，定向通过不代表完整 E2E 通过。
 
-截至 2026-09-07，`tests/` 有两类可执行测试定义：8 个 `tests/*.node.ts` 文件（26 个 `node:test` 用例）和 78 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
+`tests/` 的可执行定义由受控 Node runner 和 Playwright topology 自动发现；本节列出按领域查找测试的示例，不维护容易过期的文件或用例总数。当前数量可用下方的文件清单命令及官方 runner 收集结果核对。Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀。
 
-- **Node / cron 调度与处理器映射（2 个用例）**：`cron-schedule-wiring.node.ts`。
-- **Node / 项目管理展示契约（5 个用例）**：`project-management-recent-activity-formatter.node.ts`。
-- **Node / Composer 浏览器存储契约（2 个用例）**：`task-composer-legacy-draft-tombstone.node.ts`。
-- **Node / Composer 计划移动契约（11 个用例）**：`task-composer-plan-state.node.ts`。
-- **Node / Playwright repository topology 聚合契约（3 个用例）**：`playwright-test-topology.node.ts`。
-- **Node / Playwright AST/spec policy 契约（1 个用例）**：`playwright-spec-policy.node.ts`。
-- **Node / Playwright CLI selection 契约（1 个用例）**：`playwright-cli-selection.node.ts`。
-- **Node / Playwright reporter 与真实 CLI 契约（1 个用例）**：`playwright-topology-reporter.node.ts`。
-- **Playwright / 跨领域、基础设施与冒烟（10 个 spec）**：`business-flows`、`entity-picker`、`form-field-error-mapping`、`functional-panels`、`fuzzy-search`、`logger`、`next-image-config`、`root-layout-hydration`、`security-and-lifecycle`、`smoke`。
-- **Playwright / 账号与管理员（4 个 spec）**：`account-management`、`admin-account-options`、`feishu-user-sync-action-result`、`feishu-user-sync`。
-- **Playwright / 采购、报销与反馈写入（12 个 spec）**：`inactive-person-procurement-safety`、`processing-vendor-hook-races`、`procurement-budget-import-atomicity`、`procurement-budget-pool-dashboard`、`procurement-dashboard-spend`、`procurement-form-accessibility`、`procurement-import-dialog-races`、`procurement-notify-approver`、`procurement-pending-orders`、`procurement-shell`、`procurement-teacher-email`、`procurement-upload-atomicity`。
-- **Playwright / 飞书与通知（7 个 spec）**：`feishu-boundaries`、`feishu-delivery-guard`、`feishu-message`、`feishu-procurement-card-stage`、`feishu-procurement-confirm-card`、`notification-outbox-adapters`、`notification-user-facing-copy`。
-- **Playwright / 项目管理、迁移与发布（46 个 spec）**：在原有 43 个 spec 基础上增加 `project-management-person-kanban-query`、`project-management-person-kanban` 与 `unified-work-segments-migration`；前者锁定单人时间线的数据范围、停用人员与自查边界，后者覆盖 Desktop 上的默认人员、人员切换、只读详情和规范 URL。`project-management-query-pagination` 与 `project-management-ui-pagination` 继续锁定通知、Task、风险、近期动态的复合游标稳定排序与对象/筛选锚点校验，以及首屏外记录的可达性。
+- **Node / 调度与领域契约**：`cron-schedule-wiring.node.ts`、`project-management-recent-activity-formatter.node.ts`、`task-composer-plan-state.node.ts`。
+- **Node / runner 安全**：`playwright-test-topology.node.ts`、`playwright-spec-policy.node.ts`、`playwright-cli-selection.node.ts`、`playwright-topology-reporter.node.ts`。
+- **Playwright / 跨领域与基础设施**：`business-flows`、`functional-panels`、`security-and-lifecycle`、`smoke`。
+- **Playwright / 采购、报销与通知**：`procurement-budget-pool-dashboard`、`procurement-upload-atomicity`、`feishu-delivery-guard`、`notification-outbox-adapters`。
+- **Playwright / 项目管理、迁移与发布**：`project-management-query-pagination`、`project-management-ui-pagination`、`project-management-person-kanban`、`unified-work-segments-migration`。
 
 每个 Playwright spec 必须使用 `.spec.ts` 文件名，在首行声明 `// @playwright-project node-db` 或 `// @playwright-project ui`，并在该 spec 内直接从 `@playwright/test` 导入 `test`（允许 import alias）。分类器会先扫描 Playwright 1.61.1 默认的 `**/*.@(spec|test).?(c|m)[jt]s?(x)` 名称；`.test.ts`、`.spec.tsx`、`.test.tsx` 和相应 JS/MJS/CJS/JSX/MTS/CTS 形式都会显式拒绝，不能在项目 `testMatch` 生成前被静默遗漏。共享 AST 分类器只静态追踪官方本地 binding：每次引用都必须是已批准 direct `test...()` API 的 root，test/suite/hook 注册 callback 必须 inline；本地/容器/factory alias、computed/间接 test API 和 `test.extend` 都会 fail closed。Playwright 1.61.1 的 `test.describe.fixme`、`test.describe.serial.only`、`test.describe.parallel.only` 及 `test.expect` 的 `soft`/`poll`/`configure`/`extend`/asymmetric matcher 入口均受支持；`test.info()`、configured/extended Expect 和 matcher 返回值可正常读取或调用。`test.skip`/`fixme`/`fail`/`slow` conditional callback 必须 inline，其中的 fixture 会参与分类；fixture key 使用 AST 解码后的标识符或字符串值，Unicode escape 不能隐藏 `page`/`browser`/`context`，computed key 会 fail closed。模块或 suite 注册阶段只允许官方 test API、未被局部绑定遮蔽且参数中不含可调用本地绑定的 Node 内建调用及少量确定性全局调用；能接收 callback 的 safe-global path、Promise 或未解析构造器、本地注册 helper、非 Node 导入、namespace 解构、callback 型 factory，以及 getter/解构/对象展开/custom iterator 等隐式注册期执行一律拒绝。它不虚称能跨模块追踪 custom fixture，只在无法证明绑定安全时 fail closed；Stage 3A 再统一 UI fixture。因此无需在配置或文档维护第二份文件 topology 清单。分类器还会拒绝声明缺失/重复、node-db 文件使用浏览器 fixture、或 UI 文件完全不使用 `page`/`browser`/`context`。`node-db` project 将非浏览器 DB/API/领域 spec 收集一次；UI spec 由 `desktop`（Desktop Chrome，`1440x1000`）收集一次。默认 reporter 始终拒绝实际收集中的跨项目或未分类文件，并在校验失败时先把整套已收集测试标记为 skipped、阻止测试体副作用，再由 `onEnd` 返回失败；默认、`--list`、纯 `--project` 以及 timeout/headed/retry/trace/output/quiet 等不缩小收集集的参数属于全集选择，会逐文件验证与所选 project 相交的全部 spec 完整出现。`--project` 的 exact、大小写不敏感和 `*` wildcard 行为由 runner/reporter 共用 helper，并以真实 Playwright CLI 回归锁定 `Desktop`、`d*`、`*`、split/equal 形式及错误状态。只有文件/行号、grep、grep-invert、shard、last-failed、only-changed、test-list/test-list-invert 属于局部选择，只放宽未选择文件和每个文件的完整 project 集合要求；未知长参数直接拒绝，不能借 partial 绕过全集校验。`.node.ts` 只由 `test:node` 收集。
 
@@ -109,8 +101,8 @@ npm run test:e2e:nightly
 ```
 
 - `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，覆盖：1 个匿名/保护路由 suite、采购与项目管理导航、短标题窄屏截断、通知视图与长内容、单人只读看板、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
-- `test:e2e:full` 与兼容入口 `test:e2e` 都执行完整 84 个 spec，并保留 reporter 对全文件、全 project 收集完整性的严格校验。PR 合并前以及共享测试基础设施变更后使用这一层。
-- `test:e2e:nightly` 执行同一完整集合，并设置 `PM_RUN_SCALE_TESTS=true` 打开既有 10k/100k 规模用例。聚合门禁 `npm run test:nightly` 还会依次执行 `check`、runner lifecycle、真实 PostgreSQL safety、nightly E2E 和 `build`；仓库不包含 CI 调度文件，定时触发由外部流水线配置。
+- `test:e2e:full` 与兼容入口 `test:e2e` 都执行当前发现的全部 spec，并保留 reporter 对全文件、全 project 收集完整性的严格校验。PR 合并前以及共享测试基础设施变更后使用这一层。
+- `test:e2e:nightly` 执行同一完整集合，并设置 `PM_RUN_SCALE_TESTS=true` 打开既有 10k/100k 规模用例。聚合门禁 `npm run test:nightly` 还会依次执行 `check`、runner lifecycle、真实 PostgreSQL safety、nightly E2E 和 `build`。`.github/workflows/validate.yml` 在 push/PR 上使用隔离 PostgreSQL 运行 `check`、两项 runner 安全检查、完整 E2E、迁移部署和构建；nightly 规模门禁仍由外部调度触发。
 
 `tests/` 不使用 `page.waitForTimeout`。普通加载、导航、保存、竞态完成和数据库传播必须使用可观察状态、受控 fixture 事件、`expect.poll`、URL/locator 或持久化状态同步；“完整时间窗内没有迟到副作用”改用 Playwright 虚拟时钟，“连续渲染帧内不漂移”改用 animation-frame 采样，避免真实时间睡眠造成慢测和偶发失败。
 
@@ -270,7 +262,7 @@ npm run test:node
 npm run check
 ```
 
-`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 26 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 31/47/78 分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由，Composer 回归覆盖存储清理和计划移动边界。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
+`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。Node 用例不启动浏览器、不连接测试数据库：topology 回归覆盖文件分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，cron wiring 回归锁定当前 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由，Composer 回归覆盖存储清理和计划移动边界。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
 
 schema/migration 变更只在已确认的隔离 PostgreSQL 验证部署和结构一致性。以下连接占位符必须替换为隔离测试目标和 shadow 库，不可直接执行，也不能使用正常开发或生产连接：
 

@@ -271,7 +271,7 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非
 
 迁移 `20260811190000_remove_project_management_tags` 删除 `SegmentTag`、`TaskTag` 与 `Tag`。应用同步删除 Tag 路由、查询、Action、Task/Segment 输入和 DTO，不保留兼容入口；既有 `DomainAuditEvent` 继续 append-only 保存，但近期动态不再解释历史 `tagIds`。
 
-`scripts/cron.ts` 已删除投入状态扫描，在每日 08:15 的数据库互斥任务中继续执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
+`scripts/cron.ts` 已删除投入状态扫描。项目管理提醒设置每分钟检查；保留清理和完整性巡检每日 03:10 在数据库互斥任务中执行。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
 项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、`/progress/kanban` 人员工作看板、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面和全局读取历史，但 mutation 在事务内刷新 Actor 时统一返回 `FORBIDDEN`，不能创建 Task、修改业务或新增 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。Milestone、Revision、Project 立项和 Terminal 结束审批及对应按钮只对两类有效全局管理员可用；本人投入确认和有效参与 Task 的当前节点按各自成员范围进入 Action Inbox，不因全局读取权限扩大。
 
@@ -409,7 +409,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
 - **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 adapter 会对 `recipientOpenIds` 去重，按 payload purpose 校验 botKind，构造包含操作人、项目、任务、通知内容、中文事项名称、时间和中文业务上下文的交互卡，再交给 `sendFeishuDirectMessage()`；实体类名、枚举值和未知 context 键只保留在内部契约，不进入用户可见卡片。项目管理 Server Action 和领域 service 仍不得直接导入飞书传输层。
-- **即时触发与兜底**：项目管理 mutation 在领域事务内只写站内通知和 durable outbox；对应 Server Action 在事务提交后调用非阻塞即时 drain。独立 cron 每 5 秒扫描 notification outbox 和 Segment 状态转换，依靠 claim 和事件键承担即时任务未执行、进程退出及失败积压的兜底；缩短扫描间隔不代替生产事务入队。
+- **即时触发与兜底**：项目管理 mutation 在领域事务内只写站内通知和 durable outbox；对应 Server Action 在事务提交后调用非阻塞即时 drain。独立 cron 每 5 秒扫描 notification outbox，依靠 claim 和事件键承担即时任务未执行、进程退出及失败积压的兜底；缩短扫描间隔不代替生产事务入队。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口
@@ -487,11 +487,12 @@ npm run cron                   # 启动定时任务（独立进程）
 | 调度 | 内容 |
 |------|------|
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
-| 每日 09:00 | 采购日报、采购停留催办 |
+| 每日 09:00 | 采购日报与采购停留催办分别调度；日报查询或发送失败不会阻断催办扫描，各自记录失败日志 |
 | 每 10 分钟 | 上传清理队列与残留上传文件协调 |
 | 每 10 分钟 | 采购预算阈值扫描 |
 | 每 5 秒 | drain `NotificationOutbox`（进程内防重入） |
-| 每日 08:15 | Milestone 截止提醒、通知保留清理、项目管理完整性巡检 |
+| 每分钟 | 检查项目管理提醒设置；每个业务日期与时间点由审计和事件键去重 |
+| 每日 03:10 | 项目管理通知保留清理与完整性巡检 |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。
 
@@ -508,9 +509,9 @@ docker compose up -d postgres
 
 应用在宿主机运行，`DATABASE_URL` 指向 `localhost:5432`。
 
-### 全栈（app + cron）
+### 全栈（app + cron + 审批长连接）
 
-仓库提供 `Dockerfile` + `docker-compose.yml`，包含 **postgres**、**app**（Web）与 **cron**（定时任务）三个服务：
+仓库提供 `Dockerfile` + `docker-compose.yml`，包含 **postgres**、**app**（Web）、**cron**（定时任务）与 **feishu-approval-ws**（审批卡片回调长连接）四个服务：
 
 ```bash
 docker compose up -d --build
@@ -535,11 +536,11 @@ docker compose up -d --build
 | 挂载点 | 用途 |
 |--------|------|
 | `app-uploads` → `/app/storage/uploads` | 私有上传附件 |
-| `postgres-data` → `/var/lib/postgresql/data` | PostgreSQL 数据目录 |
+| `../management_system_data/postgres` → `/var/lib/postgresql/data` | PostgreSQL 数据目录（宿主机 bind mount） |
 
 ### 环境变量
 
-全栈 Compose 会为 app/cron 注入容器内 PostgreSQL 连接串。应用所需变量通过 `${VAR}` 从宿主机 `.env` 读取后显式注入容器（见 `.env.example`）；宿主机辅助变量如 `SUDO_PASSWORD` 不会传入容器。
+全栈 Compose 会为 app、cron 和审批长连接注入容器内 PostgreSQL 连接串。应用所需变量通过 `${VAR}` 从宿主机 `.env` 读取后显式注入容器（见 `.env.example`）；宿主机辅助变量如 `SUDO_PASSWORD` 不会传入容器。
 
 | 变量 | 说明 |
 |------|------|
@@ -553,8 +554,8 @@ docker compose up -d --build
 
 ## 已知限制
 
-- 采购订单首版无驳回流程，状态只能向前流转
-- 附件需手动备份；PostgreSQL 使用 `postgres-data` 卷或 `pg_dump`
+- 采购订单支持审批终止、退回草稿及报销资料退回重新提交；相关操作由当前状态和角色权限限制
+- 数据库和附件需按 README 的同一恢复点流程备份并定期隔离恢复演练；PostgreSQL 数据使用宿主机目录 `../management_system_data/postgres`
 - `UserRole` 不会随首次登录自动分配，须 seed 或 `/admin` 配置
 - Serverless 部署需将 cron 迁出
 

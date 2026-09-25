@@ -139,6 +139,7 @@ docker compose up -d --build
 - **app**：Next.js 应用，默认映射端口 `3000`（可通过 `.env` 设置 `APP_PORT=8080` 改宿主机端口）
 - **postgres**：PostgreSQL 16 数据库
 - **cron**：采购日报和通知 outbox 投递等后台任务，与 app 共用 PostgreSQL
+- **feishu-approval-ws**：审批机器人长连接，接收采购审批卡片等回调；与 app 共用飞书凭据和 PostgreSQL
 
 首次启动会自动执行 `npm run db:deploy` 应用 PostgreSQL migration。
 
@@ -159,20 +160,24 @@ docker compose down             # 停止
 docker compose up -d --build    # 更新代码后重新构建
 ```
 
-### 5. 数据备份
+### 5. 数据备份与恢复演练
 
-| 内容 | Docker Volume |
-|------|----------------|
-| PostgreSQL 数据 | `postgres-data` → 容器内 `/var/lib/postgresql/data` |
-| 上传附件 | `app-uploads` → 容器内 `/app/storage/uploads/` |
+PostgreSQL 数据位于宿主机 `../management_system_data/postgres`，上传附件位于 Compose 卷 `app-uploads`。两者必须作为同一恢复点保存；数据库备份不能代替附件备份。维护窗口内先停止 Web、cron 和全部飞书长连接写入进程，再对仍在运行的 PostgreSQL 执行：
 
 ```bash
-# 备份数据库到当前目录（会提示输入 POSTGRES_PASSWORD）
-docker compose exec postgres pg_dump -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-management_system}" > backup-$(date +%F).sql
-
-# 恢复到空库
-docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-management_system}" < backup.sql
+# 先选择仓库外、访问受限的备份目录，并停止全部写入进程
+set -e
+docker compose stop app cron feishu-approval-ws
+mkdir -p /secure/backup/management-YYYYMMDD
+docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > /secure/backup/management-YYYYMMDD/database.dump
+docker compose run --rm --no-deps --entrypoint tar app -C /app/storage/uploads -czf - . > /secure/backup/management-YYYYMMDD/uploads.tar.gz
+docker compose exec -T postgres pg_restore --list < /secure/backup/management-YYYYMMDD/database.dump > /dev/null
+tar -tzf /secure/backup/management-YYYYMMDD/uploads.tar.gz > /dev/null
+(cd /secure/backup/management-YYYYMMDD && sha256sum database.dump uploads.tar.gz > SHA256SUMS && sha256sum -c SHA256SUMS)
+docker compose start app cron feishu-approval-ws
 ```
+
+每次备份检查两个文件非空及校验和，并按业务确定的保留期存放在独立介质。定期在**新建的隔离 PostgreSQL 和独立上传目录**验证 `pg_restore`、附件解包、登录与附件鉴权；不要将演练恢复到生产或正常开发库。若备份期间任一命令失败，先保持写入暂停并重新制作完整恢复点，不把半套文件标为可恢复备份。
 
 更完整的 Docker 说明见 [`docs/TECH.md`](docs/TECH.md#docker-部署)。
 
@@ -239,7 +244,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 若飞书后台「事件与回调」要求配置 Request URL，**不要**填网站首页；本项目使用官方 SDK **长连接**接收事件，无需公网回调地址。
 
 1. 确保 `.env` 已配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，或已配置当前长连接机器人对应的消息应用凭证
-2. 启动长连接进程（开发：`npm run feishu:ws`；审批机器人生产环境由 `./service/install.sh` 默认安装 `pnx-management-feishu-approval-ws.service` 并自动启动）。通知机器人长连接需设置 `ENABLE_FEISHU_WS=true` 后再安装；手动运行审批长连接可用 `FEISHU_WS_BOT_KIND=approval npm run feishu:ws`。
+2. 启动长连接进程（开发：`npm run feishu:ws`；Docker 部署由 `feishu-approval-ws` 服务启动审批长连接，systemd 部署由 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`）。通知机器人长连接需设置 `ENABLE_FEISHU_WS=true` 后再安装 systemd 服务；手动运行审批长连接可用 `FEISHU_WS_BOT_KIND=approval npm run feishu:ws`。
 3. 日志出现「长连接已建立」后，在飞书开放平台 **事件与回调** → 选择 **使用长连接接收事件/回调**
 4. 订阅事件（如 `im.message.receive_v1`）；在 **回调配置** 启用 `card.action.trigger`（采购审批按钮依赖此回调）
 5. 若后台启用了加密策略，将 `Encrypt Key` / `Verification Token` 填入 `FEISHU_EVENT_ENCRYPT_KEY`、`FEISHU_VERIFICATION_TOKEN`
@@ -405,7 +410,7 @@ Revision 是用户选择时间的计划变化标记，不形成阶段，也不�
 6. **采购人上传**：多张发票（每张 ≤20MB）+ 每行实物照片（自动生成验收清单 Word）
 7. **报销员**：在详情页或弹窗中查看发票与清单后，上传报销截图
 8. **采购人确认**：点击「确认报销」
-9. **定时汇总**：`npm run cron`（每天 09:00）
+9. **定时汇总与催办**：`npm run cron`（每天 09:00 分别执行采购日报和停留催办）
 
 ## 上传文件与附件
 
