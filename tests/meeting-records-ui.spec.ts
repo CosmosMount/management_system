@@ -62,6 +62,84 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 393, height: 851
   });
 }
 
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 393, height: 851 }]) {
+  test(`会议详情可管理本人投入且他人记录只读 ${viewport.width}`, async ({ page, context, baseURL }) => {
+    if (!baseURL) throw new Error("会议测试缺少隔离服务地址");
+    await page.setViewportSize(viewport);
+    const admin = await createAccountPerson(`会议投入管理员 ${randomUUID()}`);
+    const participant = await createAccountPerson(`会议投入参与人 ${randomUUID()}`);
+    await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id,
+      role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
+    const meeting = await createMeeting(actor(admin), { requestId: randomUUID(),
+      topic: "本人投入管理", personIds: [admin.person.id, participant.person.id],
+      rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
+    const own = await createSegment({ accountId: participant.account.id, personId: participant.person.id,
+      content: "待修改的本人投入", startAt: atHour(9), endAt: atHour(10) });
+    const other = await createSegment({ accountId: admin.account.id, personId: admin.person.id,
+      content: "他人的投入", startAt: atHour(10), endAt: atHour(11) });
+    await loginAsTestUser(context, baseURL, { openId: participant.openId, name: participant.person.displayName });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`/progress/meetings/${meeting.id}`);
+    await expect(page.getByRole("button", { name: "新增投入", exact: true })).toBeVisible();
+    await page.getByTestId(`segment-block-${other.id}`).dblclick();
+    const otherDialog = page.getByRole("dialog", { name: "投入详情" });
+    await expect(otherDialog.getByRole("form", { name: "编辑投入详情" })).toHaveCount(0);
+    await expect(otherDialog.getByRole("button", { name: "删除投入" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await page.getByTestId(`segment-block-${own.id}`).dblclick();
+    const ownDialog = page.getByRole("dialog", { name: "投入详情" });
+    const edit = ownDialog.getByRole("form", { name: "编辑投入详情" });
+    await expect(edit).toBeVisible();
+    await edit.getByLabel("内容", { exact: true }).fill("会议页已修改本人投入");
+    await edit.getByRole("button", { name: "保存基本信息" }).click();
+    await expect(page.getByText("已更新投入详情", { exact: true })).toBeVisible();
+    await expect.poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: own.id } })).content)
+      .toBe("会议页已修改本人投入");
+
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const create = page.getByRole("form", { name: "投入快速创建" });
+    await expect(create.getByLabel("人员", { exact: true })).toHaveText(participant.person.displayName);
+    await expect(create.getByRole("combobox", { name: "人员" })).toHaveCount(0);
+    const createdContent = `会议页新增本人投入 ${randomUUID()}`;
+    await create.getByLabel("内容", { exact: true }).fill(createdContent);
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await page.getByRole("button", { name: "刷新时间线" }).click();
+    await expect(create.getByLabel("内容", { exact: true })).toHaveValue(createdContent);
+    await create.getByRole("button", { name: "创建", exact: true }).click();
+    await expect(page.getByText("已创建投入记录", { exact: true })).toBeVisible();
+    const created = await prisma.workSegment.findFirstOrThrow({ where: { personId: participant.person.id, content: createdContent } });
+    await expect(page.getByTestId(`segment-block-${created.id}`)).toBeVisible();
+    await page.getByTestId(`segment-block-${created.id}`).dblclick();
+    const deleteButton = page.getByRole("dialog", { name: "投入详情" }).getByRole("button", { name: "删除投入" });
+    page.once("dialog", (dialog) => void dialog.accept());
+    await deleteButton.click();
+    await expect(page.getByText("已删除投入记录", { exact: true })).toBeVisible();
+    await expect.poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: created.id } })).deletedAt).not.toBeNull();
+    await expect(page.getByTestId(`segment-block-${created.id}`)).toHaveCount(0);
+    if (viewport.width === 1440) {
+      const meetingUrl = page.url();
+      await page.getByRole("button", { name: "新增投入", exact: true }).click();
+      const outside = page.getByRole("form", { name: "投入快速创建" });
+      await outside.getByLabel("开始", { exact: true }).fill("2028-08-10T17:00");
+      await outside.getByLabel("结束", { exact: true }).fill("2028-08-10T18:00");
+      const outsideContent = `会议区间外本人投入 ${randomUUID()}`;
+      await outside.getByLabel("内容", { exact: true }).fill(outsideContent);
+      await outside.getByRole("button", { name: "创建", exact: true }).click();
+      await expect(page.getByRole("status").filter({ hasText: "记录已保存，但不在此会议时间线内" })).toBeVisible();
+      expect(await prisma.workSegment.count({ where: { personId: participant.person.id, content: outsideContent, deletedAt: null } })).toBe(1);
+      expect(page.url()).toBe(meetingUrl);
+    }
+    for (const width of [viewport.width, 360]) {
+      await page.setViewportSize({ width, height: viewport.height });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+    await expectHealthyPage(page);
+    expect(errors).toEqual([]);
+  });
+}
+
 test("会议导出加载期间禁止重复点击且请求失败可重试", async ({ page, context, baseURL }) => {
   const admin = await createAccountPerson(`纪要请求超管 ${randomUUID()}`);
   await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });

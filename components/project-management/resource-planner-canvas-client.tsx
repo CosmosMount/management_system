@@ -97,6 +97,11 @@ export function ResourcePlannerCanvasClient({
   allowIndependent = true,
   allowCreate = true,
   readOnly = false,
+  fixedCreatePerson,
+  keepCanvasRangeOnCreate = false,
+  showAnchorInspector = false,
+  onEditingStateChange,
+  onMutationSuccess,
   initialFocusId = null,
   initialFocusRevision = 0,
   initialFocusRequestId = null,
@@ -120,6 +125,11 @@ export function ResourcePlannerCanvasClient({
   allowIndependent?: boolean;
   allowCreate?: boolean;
   readOnly?: boolean;
+  fixedCreatePerson?: { id: string; displayName: string };
+  keepCanvasRangeOnCreate?: boolean;
+  showAnchorInspector?: boolean;
+  onEditingStateChange?: (editing: boolean) => void;
+  onMutationSuccess?: (message: string, result: unknown) => void;
   initialFocusId?: string | null;
   initialFocusRevision?: number;
   initialFocusRequestId?: string | null;
@@ -160,7 +170,7 @@ export function ResourcePlannerCanvasClient({
   const cachedSegments = cachedMerge.segments;
   const model = useMemo(
     () => {
-      const draftRange = createDraft &&
+      const draftRange = !keepCanvasRangeOnCreate && createDraft &&
           Number.isFinite(createDraft.startMs) &&
           Number.isFinite(createDraft.endMs) &&
           createDraft.endMs > createDraft.startMs
@@ -237,7 +247,7 @@ export function ResourcePlannerCanvasClient({
         ),
     };
     },
-    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, readOnly],
+    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, keepCanvasRangeOnCreate, readOnly],
   );
   const [presentationCenterMs, setPresentationCenterMs] = useState<number | null>(
     null,
@@ -332,6 +342,9 @@ export function ResourcePlannerCanvasClient({
     dialogDirtyRef.current = dirty;
     setDialogDirty(dirty);
   }, []);
+  useEffect(() => {
+    onEditingStateChange?.(Boolean(createDraft || openSegmentId || isPending));
+  }, [createDraft, isPending, onEditingStateChange, openSegmentId]);
   const adaptiveRefreshStateRef = useRef<"IDLE" | "DEFERRED" | "REFRESHING">("IDLE");
   const previousInitialFocusRef = useRef({
     focusId: initialFocusId,
@@ -1164,6 +1177,7 @@ export function ResourcePlannerCanvasClient({
           setSelection(null);
         }
         onSuccess?.();
+        onMutationSuccess?.(successMessage, result.data);
         if (persistViewportInUrl) {
           writeViewportUrl({
             centerMs:
@@ -1182,7 +1196,7 @@ export function ResourcePlannerCanvasClient({
           router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
             scroll: false,
           });
-        } else {
+        } else if (!onMutationSuccess) {
           router.refresh();
         }
       });
@@ -1230,7 +1244,7 @@ export function ResourcePlannerCanvasClient({
       setNotice({ kind: "error", message: "单条投入最长 31 天，请缩短待创建区间。" });
       return false;
     }
-    if (!adaptiveBlockQuery) {
+    if (!adaptiveBlockQuery && !keepCanvasRangeOnCreate) {
       const explicitRange = explicitRangeForDraft(initialModel.range, next);
       if (explicitRange.endMs - explicitRange.startMs > 366 * DAY_MS) {
         setNotice({
@@ -1376,7 +1390,7 @@ export function ResourcePlannerCanvasClient({
         initialCenterRevision: currentCenterRevision,
         initialSelection: canvasInitialSelection,
         focusRequest: canvasFocusRequest,
-        display: { showBusy: true, showInspector: readOnly && selection?.kind === "ANCHOR" },
+        display: { showBusy: true, showInspector: (readOnly || showAnchorInspector) && selection?.kind === "ANCHOR" },
         interaction: {
           enableBrushCreate: !isPending && !createDraft && canCreateSegment,
           creationRange: createDraft
@@ -1501,6 +1515,7 @@ export function ResourcePlannerCanvasClient({
             draft: createDraft,
             peopleOptions,
             peopleScope,
+            fixedPerson: fixedCreatePerson,
             taskOptions,
             defaultTaskId,
             defaultTaskTitle,
