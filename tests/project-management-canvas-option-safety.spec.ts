@@ -1064,7 +1064,7 @@ test.describe("project management canvas security project-management-canvas-opti
       );
     });
 
-  test("PERSON row creation capabilities use eligible Task existence without granting retired leaders write access", async () => {
+  test("PERSON row creation capabilities allow administrator independent investments and validate filtered Task membership", async () => {
       const resourceManager = await createAccountPerson("Capability Resource Manager");
       const teamAdmin = await createAccountPerson("Capability Team Admin");
       const owner = await createAccountPerson("Capability Owner");
@@ -1150,7 +1150,7 @@ test.describe("project management canvas security project-management-canvas-opti
       });
       expect(rowCanCreate(administratorCanvas, target.person.id)).toBe(true);
       expect(rowCanCreate(administratorCanvas, unassignedPerson.person.id)).toBe(
-        false,
+        true,
       );
       const ownerCanvas = await getTimeCanvasData({
         actor: actor(owner),

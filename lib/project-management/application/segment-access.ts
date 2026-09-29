@@ -17,7 +17,7 @@ import {
 } from "@/lib/project-management/application/segment-record";
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
-import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
+import { hasValidSegmentTaskMember, isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import type { CreateWorkSegmentInput } from "@/lib/project-management/validations/segments";
 
@@ -58,13 +58,7 @@ export async function assertSegmentReferenceTx(
 ) {
   if (!input.taskId) return;
   const task = await loadTaskForAuthorizationTx(tx, input.taskId);
-  if (
-    !task.members.some(
-      (member) =>
-        member.personId === input.personId &&
-        (member.role === "OWNER" || member.role === "PARTICIPANT"),
-    )
-  ) {
+  if (!hasValidSegmentTaskMember(input.personId, task)) {
     throw associationInvalidError("任务关联投入只能属于负责人或参与人", {
       personId: ["请先将该人员添加为负责人或参与人"],
     });
@@ -103,14 +97,7 @@ export function assertCanManageSegment(
   actor: ProjectManagementActor,
   segment: SegmentForMutation,
 ) {
-  if (
-    segment.task &&
-    !segment.task.members.some(
-      (member) =>
-        member.personId === segment.personId &&
-        (member.role === "OWNER" || member.role === "PARTICIPANT"),
-    )
-  ) {
+  if (!hasValidSegmentTaskMember(segment.personId, segment.task)) {
     throw associationInvalidError("任务关联投入只能属于负责人或参与人", {
       personId: ["请先将该人员添加为负责人或参与人"],
     });

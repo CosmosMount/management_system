@@ -4,10 +4,10 @@ import type { Prisma } from "@prisma/client";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError, queryLimitExceededError, ProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { fullSegmentSelect } from "@/lib/project-management/queries/time-canvas-records";
-import { toFullSegmentDto } from "@/lib/project-management/queries/time-canvas-dto";
+import { canCreateForPerson, toFullSegmentDto } from "@/lib/project-management/queries/time-canvas-dto";
 import { timeCanvasDataDtoSchema } from "@/lib/project-management/types/time-canvas";
 import { getTimeCanvasDataInputSchema, MAX_TIME_CANVAS_VISIBLE_SEGMENTS } from "@/lib/project-management/validations/time-canvas";
-import { taskReadableWhere } from "@/lib/project-management/authorization";
+import { isSystemAdministrator, taskReadableWhere } from "@/lib/project-management/authorization";
 import { loadTaskAnchors } from "@/lib/project-management/queries/time-canvas-anchor-loader";
 import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 import { assertCanManageMeetings, getMeeting } from "./service";
@@ -70,15 +70,23 @@ export async function getMeetingTimeline(actor: ProjectManagementActor, input: u
   if (records.length > MAX_TIME_CANVAS_VISIBLE_SEGMENTS) {
     throw queryLimitExceededError("工作记录超过 5000 条，请由会议管理员减少展示项目、任务或参与人后重试；不会省略记录");
   }
-  const segments = records.map((record) => ({
-    ...toFullSegmentDto(actor, record),
-    taskTitle: record.task ? [record.task.project?.deletedAt === null ? record.task.project.name : null, record.task.title].filter(Boolean).join(" / ") : null,
-    permissions: { canViewDetails: true, canEdit: false, canMove: false, canResize: false, canSoftDelete: false },
-  }));
+  const segments = records.map((record) => {
+    const segment = toFullSegmentDto(actor, record);
+    return {
+      ...segment,
+      taskTitle: record.task ? [record.task.project?.deletedAt === null ? record.task.project.name : null, record.task.title].filter(Boolean).join(" / ") : null,
+      permissions: parsed.kind === "SAVED"
+        ? segment.permissions
+        : { canViewDetails: true, canEdit: false, canMove: false, canResize: false, canSoftDelete: false },
+    };
+  });
   const rows = people.map((person) => ({
     kind: "PERSON" as const, id: person.id,
     label: `${person.displayName}${person.status === "INACTIVE" ? "（已停用）" : ""}`,
-    sublabel: null, capabilities: { canCreateSegment: false },
+    sublabel: null, capabilities: { canCreateSegment:
+      parsed.kind === "SAVED" && person.status === "ACTIVE" &&
+      (isSystemAdministrator(actor) || (personIds.includes(person.id) && person.id === actor.personId)) &&
+      canCreateForPerson(actor, person.id, null) },
   }));
   const anchors = loadedAnchors.map((task) => ({
     ...task,

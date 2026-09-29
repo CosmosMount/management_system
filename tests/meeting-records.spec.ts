@@ -144,7 +144,10 @@ test("会议展示配置只读、动态展开项目、任务迁移及删除兼�
   expect(current.rows.map((row) => row.id)).toEqual(expect.arrayContaining([participant.person.id, viewer.person.id]));
   expect(current.anchors[0].capabilities.canUpdateMetadata).toBe(false);
   expect(current.anchors[0].nodes.every((node) => !node.capabilities.canEditDraft)).toBe(true);
-  expect((await getMeetingTimeline(actor(participant), query)).rowPageKey).toBe(current.rowPageKey);
+  const participantView = await getMeetingTimeline(actor(participant), query);
+  expect(participantView.segments).toEqual(current.segments);
+  expect(participantView.rows.map((row) => row.id)).toEqual(current.rows.map((row) => row.id));
+  expect(participantView.rowPageKey).not.toBe(current.rowPageKey);
   expect((await getMeeting({ meetingId: created.id })).participants.map((person) => person.id)).toEqual([participant.person.id]);
   await prisma.task.update({ where: { id: task.taskId }, data: { projectId: null } });
   const detached = await getMeetingTimeline(actor(admin), query);
@@ -215,7 +218,7 @@ test("并发更新只成功一次，纪要及参与人不被静默覆盖", async
   expect(await prisma.domainAuditEvent.count({ where: { entityId: meeting.id, action: "meeting.update" } })).toBe(1);
 });
 
-test("所有查看者得到相同的跨项目只读时间线，包括空行、停用人员与实时更新", async () => {
+test("无本人投入的查看者得到相同的跨项目时间线，包括空行、停用人员与实时更新", async () => {
   const { admin, viewer, participant, input } = await fixture();
   const empty = await createAccountPerson(`会议空行 ${randomUUID()}`);
   const meeting = await createMeeting(actor(admin), { ...input, personIds: [participant.person.id, empty.person.id] });
@@ -233,8 +236,18 @@ test("所有查看者得到相同的跨项目只读时间线，包括空行、�
   const query = { kind: "SAVED", meetingId: meeting.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
   const ordinary = await getMeetingTimeline(actor(viewer), query);
   const adminResult = await getMeetingTimeline(actor(admin, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]), query);
-  expect(ordinary.rows).toEqual(adminResult.rows);
-  expect(ordinary.segments).toEqual(adminResult.segments);
+  expect(ordinary.rows.map((row) => ({ ...row, capabilities: null })))
+    .toEqual(adminResult.rows.map((row) => ({ ...row, capabilities: null })));
+  expect(adminResult.rows.find((row) => row.id === participant.person.id)?.capabilities.canCreateSegment).toBe(true);
+  expect(adminResult.rows.find((row) => row.id === empty.person.id)?.capabilities.canCreateSegment).toBe(false);
+  const withoutPermissions = (segment: typeof ordinary.segments[number]) =>
+    segment.kind === "SEGMENT" ? { ...segment, permissions: null } : segment;
+  expect(ordinary.segments.map(withoutPermissions)).toEqual(adminResult.segments.map(withoutPermissions));
+  for (const segment of adminResult.segments) {
+    if (segment.kind === "SEGMENT") {
+      expect(segment.permissions).toEqual({ canViewDetails: true, canEdit: true, canMove: true, canResize: true, canSoftDelete: true });
+    }
+  }
   expect(ordinary.rows).toHaveLength(2);
   expect(ordinary.rows.every((row) => !row.capabilities.canCreateSegment)).toBe(true);
   expect(ordinary.segments).toHaveLength(2);
@@ -250,6 +263,49 @@ test("所有查看者得到相同的跨项目只读时间线，包括空行、�
   await expectErrorCode(getMeetingTimeline(actor(viewer), { ...query, personIds: [viewer.person.id] }), "VALIDATION_ERROR");
   await expectErrorCode(getMeetingTimeline(actor(viewer), { ...query, rangeEnd: atHour(19).toISOString() }), "VALIDATION_ERROR");
   await expectErrorCode(getMeetingTimeline(actor(viewer), { kind: "PREVIEW", personIds: input.personIds, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd }), "FORBIDDEN");
+});
+
+test("会议详情按逐条权限管理投入，全局管理员可代录且预览仍只读", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const task = await createTask({ ownerAccountId: participant.account.id,
+    title: `非参会者展示任务 ${randomUUID()}`, team: "英雄", techGroup: "电控",
+    members: [{ personId: participant.person.id, role: "OWNER" }, { personId: viewer.person.id, role: "PARTICIPANT" }] });
+  const meeting = await createMeeting(actor(admin), { ...input,
+    personIds: [admin.person.id, participant.person.id],
+    timelineDisplay: { projectIds: [], taskIds: [task.taskId] } });
+  const participantSegment = await createSegment({ accountId: participant.account.id, personId: participant.person.id,
+    startAt: atHour(9), endAt: atHour(10), content: "参会者本人投入" });
+  const adminSegment = await createSegment({ accountId: admin.account.id, personId: admin.person.id,
+    startAt: atHour(10), endAt: atHour(11), content: "管理员本人投入" });
+  const viewerSegment = await createSegment({ accountId: viewer.account.id, personId: viewer.person.id,
+    taskId: task.taskId, startAt: atHour(11), endAt: atHour(12), content: "展示任务的非参会者投入" });
+  const query = { kind: "SAVED", meetingId: meeting.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
+  const adminActor = actor(admin, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]);
+  for (const [currentActor, editableIds, canCreate] of [
+    [actor(participant), [participantSegment.id, viewerSegment.id], true],
+    [adminActor, [participantSegment.id, adminSegment.id, viewerSegment.id], true],
+    [actor(viewer), [viewerSegment.id], false],
+  ] as const) {
+    const timeline = await getMeetingTimeline(currentActor, query);
+    expect(timeline.rows.find((row) => row.id === currentActor.personId)?.capabilities.canCreateSegment).toBe(canCreate);
+    for (const segment of timeline.segments) {
+      if (segment.kind !== "SEGMENT") continue;
+      expect(segment.permissions.canEdit).toBe(editableIds.includes(segment.id));
+      expect(segment.permissions.canSoftDelete).toBe(editableIds.includes(segment.id));
+    }
+  }
+  for (const role of ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] as const) {
+    const timeline = await getMeetingTimeline({ ...adminActor, systemRoles: [{ role, team: "", techGroup: "" }] }, query);
+    expect(timeline.rows.every((row) => row.capabilities.canCreateSegment)).toBe(true);
+  }
+  const preview = await getMeetingTimeline(adminActor, { kind: "PREVIEW", personIds: [admin.person.id, participant.person.id],
+    timelineDisplay: { projectIds: [], taskIds: [task.taskId] }, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd });
+  expect(preview.rows.every((row) => !row.capabilities.canCreateSegment)).toBe(true);
+  expect(preview.segments.every((segment) => segment.kind !== "SEGMENT" ||
+    (!segment.permissions.canEdit && !segment.permissions.canSoftDelete))).toBe(true);
+  const inactive = await getMeetingTimeline({ ...actor(participant), isActive: false }, query);
+  expect(inactive.rows.every((row) => !row.capabilities.canCreateSegment)).toBe(true);
+  expect(inactive.segments.every((segment) => segment.kind !== "SEGMENT" || !segment.permissions.canEdit)).toBe(true);
 });
 
 test("会议列表按稳定游标分页且搜索不携带纪要", async () => {

@@ -81,7 +81,9 @@ export function ResourcePlannerCanvasView({
         <span className="text-xs text-muted-foreground">
           {readOnly
             ? ""
-            : "点击投入后选择查看或编辑，也可双击打开详情；触摸滑动用于浏览时间轴。"}
+            : canCreateSegment
+              ? "在可新增的人员行空白处拖选时间即可新增投入，也可点击“新增投入”填写。点击已有投入可查看或修改；触摸滑动用于浏览时间轴。"
+              : "点击投入后查看详情；有权限的记录可编辑。双击可打开详情；触摸滑动用于浏览时间轴。"}
         </span>
       </div>
 
@@ -167,7 +169,7 @@ export function ResourcePlannerCanvasView({
           <DialogHeader>
             <DialogTitle>投入详情</DialogTitle>
             <DialogDescription>
-              {readOnly
+              {readOnly || !segmentDialog.inspectorProps.canvasSegment?.permissions.canEdit
                 ? "复用打开前的完整时间线上下文；当前投入与其他对象均为只读。"
                 : "复用打开前的完整时间线上下文；仅当前打开的投入可修改，其他对象只读。"}
             </DialogDescription>

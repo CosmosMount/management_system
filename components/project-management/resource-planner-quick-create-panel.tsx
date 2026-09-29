@@ -37,6 +37,7 @@ export function QuickCreatePanel({
   draft,
   peopleOptions,
   peopleScope,
+  fixedPerson,
   taskOptions,
   defaultTaskId,
   defaultTaskTitle,
@@ -52,6 +53,7 @@ export function QuickCreatePanel({
   draft: CreateDraft;
   peopleOptions: PersonOptionDto[];
   peopleScope: UserPickerScope;
+  fixedPerson?: { id: string; displayName: string };
   taskOptions: TaskOption[];
   defaultTaskId: string;
   defaultTaskTitle: string;
@@ -137,7 +139,7 @@ export function QuickCreatePanel({
         const form = new FormData(event.currentTarget);
         const submittedTaskId = String(form.get("taskId") ?? "") || null;
         const nextErrors: Record<string, string[]> = {};
-        const personId = String(form.get("personId") ?? draft.personId);
+        const personId = fixedPerson?.id ?? String(form.get("personId") ?? draft.personId);
         const content = String(form.get("content") ?? "");
         if (!personId) nextErrors.personId = ["请选择人员"];
         if (!content.trim()) nextErrors.content = ["请输入工作内容"];
@@ -180,7 +182,10 @@ export function QuickCreatePanel({
         <p className="text-sm text-muted-foreground">拖选或精确填写时间；最终规则由服务端校验。</p>
       </div>
       <Field label="人员" htmlFor="quick-person">
-        <UserSelect
+        {fixedPerson ? <>
+          <output id="quick-person" className="block rounded-md border border-input px-3 py-2 text-sm">{fixedPerson.displayName}</output>
+          <input type="hidden" name="personId" value={fixedPerson.id} />
+        </> : <UserSelect
           inputId="quick-person"
           ariaLabel="人员"
           scope={peopleScope}
@@ -199,7 +204,7 @@ export function QuickCreatePanel({
           placeholder="按姓名或拼音首字母搜索"
           invalid={Boolean(fieldErrors.personId)}
           ariaDescribedBy={fieldErrors.personId ? "quick-person-error" : undefined}
-        />
+        />}
         <FieldError id="quick-person-error" messages={fieldErrors.personId} />
       </Field>
       <Field label="开始" htmlFor="quick-start">

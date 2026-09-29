@@ -6,6 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   createTimeScale,
   intervalToRect,
@@ -555,21 +556,29 @@ function CreationRangeBlock({
     pointerId: number;
     kind: "MOVE" | "RESIZE_START" | "RESIZE_END";
     clientX: number;
+    clientY: number;
     scrollLeft: number;
+    scrollTop: number;
     startMs: number;
     endMs: number;
+    overlay: { container: HTMLElement; leftOffset: number; top: number; height: number } | null;
   } | null>(null);
   const [preview, setPreview] = useState<TimeCanvasRange | null>(null);
+  const [previewOffsetY, setPreviewOffsetY] = useState(0);
   const [dropState, setDropState] = useState<"valid" | "invalid" | null>(null);
   const previewFrameRef = useRef<number | null>(null);
   const pendingPointerRef = useRef<{
     range: TimeCanvasRange;
     target: ReturnType<typeof creationDropTargetAtPoint>;
+    offsetY: number;
   } | null>(null);
   const highlightedRowRef = useRef<HTMLElement | null>(null);
   const displayed = preview ?? range;
   const rect = intervalToRect(displayed.startMs, displayed.endMs, scale);
+  // Leave a move target between the resize handles even at coarse zoom levels.
+  const previewWidth = Math.max(12, rect.width);
   const currentRowLabel = rowTargets.find((row) => row.id === range.rowId)?.label;
+  const overlay = drag?.kind === "MOVE" ? drag.overlay : null;
 
   function submit(
     kind: "MOVE" | "RESIZE_START" | "RESIZE_END" | "KEYBOARD_MOVE",
@@ -607,6 +616,26 @@ function CreationRangeBlock({
   }, []);
 
   return (
+    <>
+    {overlay && createPortal(
+      <span
+        aria-hidden="true"
+        data-testid="time-canvas-creation-drag-preview"
+        className={cn(
+          "pointer-events-none absolute z-[35] rounded border-2 border-dashed border-primary bg-primary/15",
+          dropState === "valid" && "border-emerald-600 bg-emerald-100/70",
+          dropState === "invalid" && "border-destructive bg-destructive/15",
+        )}
+        style={{
+          left: overlay.leftOffset + rect.left,
+          top: overlay.top + previewOffsetY,
+          width: previewWidth,
+          height: overlay.height,
+          clipPath: `inset(0 0 0 ${Math.max(0, overlay.container.scrollLeft - rect.left)}px)`,
+        }}
+      />,
+      overlay.container,
+    )}
     <button
       type="button"
       className={cn(
@@ -614,7 +643,8 @@ function CreationRangeBlock({
         dropState === "valid" && "border-emerald-600 bg-emerald-100/70 text-emerald-900",
         dropState === "invalid" && "border-destructive bg-destructive/15 text-destructive",
       )}
-      style={{ left: rect.left, width: rect.width }}
+      // Keep the capture target mounted; the overlay escapes the source row's clipping.
+      style={{ left: rect.left, width: previewWidth, opacity: overlay ? 0 : undefined }}
       aria-label={`待创建投入${currentRowLabel ? `，${currentRowLabel}` : ""}，${formatRange(displayed.startMs, displayed.endMs)}；可移动、跨行或调整边缘`}
       data-canvas-object
       data-testid="time-canvas-creation-range"
@@ -691,14 +721,25 @@ function CreationRangeBlock({
         const scroller = event.currentTarget.closest<HTMLElement>(
           "[data-testid='time-canvas-scroll']",
         );
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const scrollBounds = scroller?.getBoundingClientRect();
         setDrag({
           pointerId: event.pointerId,
           kind,
           clientX: event.clientX,
+          clientY: event.clientY,
           scrollLeft: scroller?.scrollLeft ?? 0,
+          scrollTop: scroller?.scrollTop ?? 0,
           startMs: range.startMs,
           endMs: range.endMs,
+          overlay: scroller && scrollBounds ? {
+            container: scroller,
+            leftOffset: bounds.left - scrollBounds.left - scroller.clientLeft + scroller.scrollLeft - rect.left,
+            top: bounds.top - scrollBounds.top - scroller.clientTop + scroller.scrollTop,
+            height: bounds.height,
+          } : null,
         });
+        setPreviewOffsetY(0);
         setPreview({ startMs: range.startMs, endMs: range.endMs });
       }}
       onPointerMove={(event) => {
@@ -715,6 +756,9 @@ function CreationRangeBlock({
           0,
         );
         pendingPointerRef.current = {
+          offsetY: drag.kind === "MOVE"
+            ? event.clientY - drag.clientY + (scroller?.scrollTop ?? 0) - drag.scrollTop
+            : 0,
           range: transformedRange(
             drag,
             deltaMs,
@@ -735,6 +779,7 @@ function CreationRangeBlock({
           pendingPointerRef.current = null;
           if (!pending) return;
           setPreview(pending.range);
+          setPreviewOffsetY(pending.offsetY);
           applyDropTarget(pending.target);
         });
       }}
@@ -774,16 +819,19 @@ function CreationRangeBlock({
     >
       <span
         className="absolute inset-y-0 left-0 w-3 cursor-ew-resize"
+        style={{ width: "min(12px, 25%)" }}
         data-create-resize-handle="start"
         aria-hidden="true"
       />
       <span className="sr-only">待创建投入</span>
       <span
         className="absolute inset-y-0 right-0 w-3 cursor-ew-resize"
+        style={{ width: "min(12px, 25%)" }}
         data-create-resize-handle="end"
         aria-hidden="true"
       />
     </button>
+    </>
   );
 }
 

@@ -1,7 +1,7 @@
 // @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import type { TaskMemberRole } from "@prisma/client";
+import { Prisma, type TaskMemberRole } from "@prisma/client";
 import type { Client } from "pg";
 import { prisma } from "../lib/prisma";
 import { activateTask, createTaskDraft } from "../lib/project-management/application/lifecycle-service";
@@ -149,6 +149,84 @@ test.describe("统一投入记录", () => {
     await expectServiceError(updateWorkSegment(actor(fixture.admin), {
       segmentId: orphaned.id, expectedUpdatedAt: orphaned.updatedAt, content: "不可绕过成员约束",
     }), "ASSOCIATION_INVALID");
+    const detail = await getWorkSegment({
+      actor: actor(fixture.admin, [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }]),
+      input: { segmentId: orphaned.id },
+    });
+    expect(detail.permissions).toEqual({ canViewDetails: true, canEdit: false,
+      canMove: false, canResize: false, canSoftDelete: false });
+  });
+
+  test("super administrators manage unrelated investments with complete history and current authorization", async () => {
+    const fixture = await createActivatedFixture();
+    const role = await prisma.systemRoleAssignment.create({ data: {
+      accountId: fixture.outsider.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "",
+    } });
+    const admin = actor(fixture.outsider, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]);
+    const originalContent = `${"完整审计内容".repeat(60)}修改前结尾`;
+    const content = `${"完整审计内容".repeat(60)}修改后结尾`;
+    for (const taskId of [undefined, fixture.taskId]) {
+      const created = await createWorkSegment(actor(fixture.member), {
+        ...recordInput(fixture.member.person.id, 9, 10), taskId, content: originalContent,
+      });
+      expect((await getWorkSegment({ actor: admin, input: { segmentId: created.segment.id } })).permissions.canEdit).toBe(true);
+      const startAt = new Date(atHour(9).getTime() + 1);
+      const updated = await updateWorkSegment(admin, { segmentId: created.segment.id,
+        expectedUpdatedAt: created.segment.updatedAt, content, startAt });
+      const history = await listWorkSegmentChanges({ actor: actor(fixture.member), input: { segmentId: created.segment.id, limit: 1 } });
+      expect(history.items[0]).toMatchObject({ action: "修改投入", actorName: fixture.outsider.person.displayName,
+        reason: "修改投入记录", differences: expect.arrayContaining([{ label: "内容", before: originalContent, after: content }]) });
+      const timeDiff = history.items[0].differences.find((difference) => difference.label === "开始时间");
+      expect(timeDiff?.before).not.toBe(timeDiff?.after);
+      expect(timeDiff?.after).toContain(".001");
+      expect(history.nextCursor).not.toBeNull();
+      const older = await listWorkSegmentChanges({ actor: admin, input: { segmentId: created.segment.id, cursor: history.nextCursor, limit: 1 } });
+      expect(older.items[0].action).toBe("创建投入");
+      const audit = await prisma.domainAuditEvent.findFirstOrThrow({ where: { entityId: created.segment.id, action: "pm.segment.update" } });
+      expect(audit).toMatchObject({ actorAccountId: admin.accountId,
+        before: { content: originalContent }, after: { content, startAt: startAt.toISOString() } });
+      await softDeleteWorkSegment(admin, { segmentId: created.segment.id, expectedUpdatedAt: updated.segment.updatedAt });
+    }
+    const record = await createWorkSegment(actor(fixture.member), recordInput(fixture.member.person.id, 12, 13));
+    await prisma.systemRoleAssignment.update({ where: { id: role.id }, data: { revokedAt: new Date() } });
+    const input = { segmentId: record.segment.id, expectedUpdatedAt: record.segment.updatedAt, content: "撤权不能使用缓存权限" };
+    await expectServiceError(updateWorkSegment(admin, input), "FORBIDDEN");
+    await prisma.systemRoleAssignment.update({ where: { id: role.id }, data: { revokedAt: null } });
+    await prisma.person.update({ where: { id: admin.personId }, data: { status: "INACTIVE" } });
+    await expectServiceError(updateWorkSegment(admin, input), "FORBIDDEN");
+    expect(await prisma.workSegmentChange.count({ where: { segmentId: record.segment.id } })).toBe(1);
+  });
+
+  test("audit failure rolls back the investment and its per-record change", async () => {
+    const fixture = await createActivatedFixture();
+    const record = await createWorkSegment(actor(fixture.member), recordInput(fixture.member.person.id, 9, 10));
+    const before = await prisma.workSegment.findUniqueOrThrow({ where: { id: record.segment.id } });
+    const name = Prisma.raw(`"test_segment_audit_${randomUUID().replaceAll("-", "")}"`);
+    await prisma.$executeRaw(Prisma.sql`
+      CREATE FUNCTION ${name}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."action" = 'pm.segment.update' AND NEW."after"->>'content' = 'SEGMENT_AUDIT_ROLLBACK' THEN
+          RAISE EXCEPTION 'controlled segment audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    try {
+      await prisma.$executeRaw(Prisma.sql`CREATE TRIGGER ${name} BEFORE INSERT ON "DomainAuditEvent"
+        FOR EACH ROW EXECUTE FUNCTION ${name}()`);
+      try {
+        await expect(updateWorkSegment(actor(fixture.admin), { segmentId: record.segment.id,
+          expectedUpdatedAt: record.segment.updatedAt, content: "SEGMENT_AUDIT_ROLLBACK" })).rejects.toThrow("controlled segment audit failure");
+      } finally {
+        await prisma.$executeRaw(Prisma.sql`DROP TRIGGER ${name} ON "DomainAuditEvent"`);
+      }
+    } finally {
+      await prisma.$executeRaw(Prisma.sql`DROP FUNCTION ${name}()`);
+    }
+    expect(await prisma.workSegment.findUniqueOrThrow({ where: { id: record.segment.id } })).toEqual(before);
+    expect(await prisma.workSegmentChange.count({ where: { segmentId: record.segment.id } })).toBe(1);
+    expect(await prisma.domainAuditEvent.count({ where: { entityId: record.segment.id } })).toBe(1);
   });
 
   test("stale updates return only a safe authoritative version and persist nothing", async () => {

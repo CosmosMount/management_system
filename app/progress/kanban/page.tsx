@@ -136,8 +136,7 @@ export default async function ProgressKanbanPage({
             initialZoom={requestedScale}
             initialCenterMs={resolvedCenter}
             mode="PERSONAL_TIMELINE"
-            allowCreate={false}
-            readOnly
+            showAnchorInspector
             persistViewportInUrl
             adaptiveBlockQuery={{
               kind: "PERSON_TIMELINE",
