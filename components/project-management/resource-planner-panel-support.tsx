@@ -19,6 +19,7 @@ export type SegmentChange = {
   key: string;
   action: string;
   actorName: string;
+  reason: string;
   createdAt: string;
   differences: Array<{
     label: string;

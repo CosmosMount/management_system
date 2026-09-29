@@ -2,7 +2,7 @@ import type { TaskStatus } from "@prisma/client";
 import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import { authorize } from "@/lib/project-management/authorization";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
-import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
+import { hasValidSegmentTaskMember, isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import type {
   SegmentPermissionsDto,
@@ -169,7 +169,8 @@ export function segmentPermissions(
       task: segment.task ? taskAuthorizationResource(segment.task) : null,
     },
   }).allowed;
-  const editable = canManage && !segment.deletedAt;
+  const editable = canManage && !segment.deletedAt &&
+    hasValidSegmentTaskMember(segment.personId, segment.task);
   return {
     canViewDetails: true,
     canEdit: editable,

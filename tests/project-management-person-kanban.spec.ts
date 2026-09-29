@@ -55,7 +55,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     expect(browserErrors).toEqual([]);
   });
 
-  test("segment owners, Task owners and administrators cannot mutate the kanban", async ({
+  test("segment owners, Task owners and administrators can create and edit on the kanban", async ({
     context,
     page,
     baseURL,
@@ -64,22 +64,6 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     if (!baseURL) throw new Error("人员看板测试缺少 baseURL");
     const fixture = await createUiFixture();
     const browserErrors = collectBrowserErrors(page);
-    const businessState = async () => ({
-      segments: await prisma.workSegment.findMany({
-        where: { taskId: fixture.taskId },
-        orderBy: { id: "asc" },
-      }),
-      changes: await prisma.workSegmentChange.count({
-        where: { segment: { taskId: fixture.taskId } },
-      }),
-      audits: await prisma.domainAuditEvent.count({
-        where: { taskId: fixture.taskId },
-      }),
-      outbox: await prisma.notificationOutbox.count({
-        where: { channel: "project-management" },
-      }),
-    });
-    const before = await businessState();
     for (const viewer of [fixture.member, fixture.owner, fixture.admin]) {
       await loginAsTestUser(context, baseURL, {
         openId: viewer.openId,
@@ -88,10 +72,21 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
       await page.goto(
         `/progress/kanban?people=${fixture.member.person.id}&scale=month&center=2026-08-10T10:00:00.000Z`,
       );
-      await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
-      await expectReadOnlyConfirmableSegment(page, fixture.confirmableSegmentId);
+      await expect(page.getByRole("button", { name: "新增投入" })).toBeVisible();
+      await page.getByTestId(`segment-block-${fixture.confirmableSegmentId}`).press("Enter");
+      const dialog = page.getByRole("dialog", { name: "投入详情" });
+      const content = `人员时间线修改：${viewer.person.displayName}`;
+      await dialog.getByLabel("内容", { exact: true }).fill(content);
+      await dialog.getByRole("button", { name: "保存基本信息" }).click();
+      await expect(dialog).not.toBeVisible();
+      await expect.poll(async () => (await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.confirmableSegmentId },
+      })).content).toBe(content);
+      const change = await prisma.workSegmentChange.findFirstOrThrow({
+        where: { segmentId: fixture.confirmableSegmentId, action: "UPDATE", actorAccountId: viewer.account.id },
+      });
+      expect(change.after).toMatchObject({ content });
       await expectHealthyPage(page);
-      expect(await businessState()).toEqual(before);
     }
     expect(browserErrors).toEqual([]);
   });

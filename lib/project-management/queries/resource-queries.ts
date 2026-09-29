@@ -198,9 +198,10 @@ export function formatWorkSegmentChange(
   })();
   const differences = row.action === "UPDATE"
     ? Object.entries(historyFieldLabels).flatMap(([field, label]) => {
+        if (before?.[field] === after?.[field]) return [];
         const previous = formatHistoryValue(field, before?.[field], names);
         const next = formatHistoryValue(field, after?.[field], names);
-        return previous === next ? [] : [{ label, before: previous, after: next }];
+        return [{ label, before: previous, after: next }];
       })
     : [];
   return {
@@ -247,9 +248,9 @@ function formatHistoryValue(
     const date = stringValue(value);
     return date ? formatHistoryDate(date) : "未填写";
   }
-  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+  const text = typeof value === "string" ? value : value == null ? "" : String(value);
   if (!text) return "未填写";
-  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+  return text;
 }
 
 function jsonObject(value: Prisma.JsonValue | null): Prisma.JsonObject | null {
@@ -272,6 +273,8 @@ function formatHistoryDate(value: string) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
     hourCycle: "h23",
   }).format(date);
 }

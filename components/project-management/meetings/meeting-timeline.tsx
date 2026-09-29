@@ -77,7 +77,8 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
     setEditing(false);
     setRevision((value) => value + 1);
   }, []);
-  const ownRow = current?.model?.rows.find((row) => row.kind === "PERSON" && row.editable);
+  const createRows = current?.model?.rows.filter((row) => row.kind === "PERSON" && row.editable) ?? [];
+  const defaultCreateRow = createRows[0];
   const canManage = source.kind === "SAVED";
 
   return <section className="min-w-0 space-y-3" aria-label="会议工作时间线">
@@ -86,7 +87,7 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
       {current.display.tasks.length > 0 && <p>展示任务：{current.display.tasks.map((task) => task.title).join("、")}</p>}
       {(current.display.unavailableProjectCount > 0 || current.display.unavailableTaskCount > 0) && <p role="status">有 {current.display.unavailableProjectCount} 个项目、{current.display.unavailableTaskCount} 个任务已不可用，管理员可在编辑会议时移除；其他时间线正常展示。</p>}
     </div>}
-    <p className="text-sm text-muted-foreground">时间线展示当前工作记录，非会议保存时快照。{canManage ? "在职人员可修改和删除本人显示的投入；参会者还可新增本人投入。" : "预览中的工作记录只读。"}</p>
+    <p className="text-sm text-muted-foreground">时间线展示当前工作记录，非会议保存时快照。{canManage ? "有权限的投入可修改和删除；全局管理员可拖选新增他人投入，参会者可新增本人投入。" : "预览中的工作记录只读。"}</p>
     {status && <p role="status" className="text-sm">{status}</p>}
     {!current && <p role="status">正在加载工作时间线…</p>}
     {current?.error && <div className="space-y-2">
@@ -95,9 +96,9 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
     </div>}
     {current?.model && <div className="min-w-0 overflow-hidden" data-testid="meeting-timeline">
       <ResourcePlannerCanvasClient key={loadKey} mode="PERSONAL_TIMELINE" initialModel={current.model}
-        peopleOptions={[]} taskOptions={[]} defaultPersonId={ownRow?.sourceId ?? ""}
-        allowCreate={canManage && Boolean(ownRow)} allowIndependent={canManage} readOnly={!canManage}
-        fixedCreatePerson={ownRow ? { id: ownRow.sourceId, displayName: ownRow.label } : undefined}
+        peopleOptions={[]} taskOptions={[]} defaultPersonId={defaultCreateRow?.sourceId ?? ""}
+        allowCreate={canManage && Boolean(defaultCreateRow)} allowIndependent={canManage} readOnly={!canManage}
+        fixedCreatePerson={createRows.length === 1 && defaultCreateRow ? { id: defaultCreateRow.sourceId, displayName: defaultCreateRow.label } : undefined}
         keepCanvasRangeOnCreate showAnchorInspector onEditingStateChange={setEditing}
         onMutationSuccess={canManage ? onMutationSuccess : undefined}
         initialCenterMs={(Date.parse(source.rangeStart) + Date.parse(source.rangeEnd)) / 2}

@@ -325,11 +325,22 @@ export function SegmentInspector({
                   </time>
                 </div>
                 <p className="mt-1 text-muted-foreground">操作者：{change.actorName}</p>
+                <p className="mt-1 break-words text-muted-foreground">操作说明：{change.reason}</p>
                 {change.differences.length > 0 && (
                   <ul className="mt-2 space-y-1 border-t border-border pt-2">
                     {change.differences.map((difference, index) => (
-                      <li key={`${difference.label}:${index}`} className="break-words">
-                        {difference.label}：{difference.before} → {difference.after}
+                      <li key={`${difference.label}:${index}`} className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                        {Math.max(difference.before.length, difference.after.length) > 160 ? (
+                          <details>
+                            <summary className="cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-ring">
+                              {difference.label}：展开完整修改前后内容
+                            </summary>
+                            <dl className="mt-2 space-y-1">
+                              <dt className="font-medium">修改前</dt><dd>{difference.before}</dd>
+                              <dt className="font-medium">修改后</dt><dd>{difference.after}</dd>
+                            </dl>
+                          </details>
+                        ) : `${difference.label}：${difference.before} → ${difference.after}`}
                       </li>
                     ))}
                   </ul>

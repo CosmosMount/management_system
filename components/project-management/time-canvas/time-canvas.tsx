@@ -631,6 +631,12 @@ export function TimeCanvas({
                       >
                         <RowHeader
                           row={row}
+                          editable={row.kind === "PERSON"
+                            ? Boolean(row.editable && interaction?.enableBrushCreate) ||
+                              (segmentsByRow.get(row.id) ?? []).some((segment) =>
+                                segment.permissions.canEdit || segment.permissions.canSoftDelete,
+                              )
+                            : row.editable}
                           onNavigate={interaction?.onRowNavigation}
                         />
                         <TimelineRow

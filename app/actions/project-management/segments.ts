@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import {
   runProjectManagementAction,
   type ProjectManagementActionResult,
@@ -89,6 +90,11 @@ async function runSegmentAction<T extends SegmentMutationResult>(
       log.setActorAccountId(actor.accountId);
       const result = await service(actor, input);
       revalidateProjectManagement(result.segment.taskId ?? undefined);
+      // A person's investment also appears outside its associated task or project.
+      revalidatePath("/progress/kanban");
+      revalidatePath("/progress/tasks/[id]", "page");
+      revalidatePath("/progress/projects/[id]", "page");
+      revalidatePath("/progress/meetings/[id]", "page");
       return result;
     },
   });

@@ -183,9 +183,11 @@ export const TimeCanvasBottomScrollbar = forwardRef<
 
 export function RowHeader({
   row,
+  editable = row.editable,
   onNavigate,
 }: {
   row: TimeCanvasRow;
+  editable?: boolean;
   onNavigate?: (row: TimeCanvasRow) => boolean;
 }) {
   const project = row.kind === "PERSON" ? null : row.project;
@@ -229,7 +231,7 @@ export function RowHeader({
             {row.label}
           </span>
         )}
-        {row.editable ? (
+        {editable ? (
           <Badge variant="outline" className="shrink-0 text-[10px]">可编辑</Badge>
         ) : (
           <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-label="只读" />

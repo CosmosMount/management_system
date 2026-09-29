@@ -236,8 +236,18 @@ test("无本人投入的查看者得到相同的跨项目时间线，包括空�
   const query = { kind: "SAVED", meetingId: meeting.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
   const ordinary = await getMeetingTimeline(actor(viewer), query);
   const adminResult = await getMeetingTimeline(actor(admin, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]), query);
-  expect(ordinary.rows).toEqual(adminResult.rows);
-  expect(ordinary.segments).toEqual(adminResult.segments);
+  expect(ordinary.rows.map((row) => ({ ...row, capabilities: null })))
+    .toEqual(adminResult.rows.map((row) => ({ ...row, capabilities: null })));
+  expect(adminResult.rows.find((row) => row.id === participant.person.id)?.capabilities.canCreateSegment).toBe(true);
+  expect(adminResult.rows.find((row) => row.id === empty.person.id)?.capabilities.canCreateSegment).toBe(false);
+  const withoutPermissions = (segment: typeof ordinary.segments[number]) =>
+    segment.kind === "SEGMENT" ? { ...segment, permissions: null } : segment;
+  expect(ordinary.segments.map(withoutPermissions)).toEqual(adminResult.segments.map(withoutPermissions));
+  for (const segment of adminResult.segments) {
+    if (segment.kind === "SEGMENT") {
+      expect(segment.permissions).toEqual({ canViewDetails: true, canEdit: true, canMove: true, canResize: true, canSoftDelete: true });
+    }
+  }
   expect(ordinary.rows).toHaveLength(2);
   expect(ordinary.rows.every((row) => !row.capabilities.canCreateSegment)).toBe(true);
   expect(ordinary.segments).toHaveLength(2);
@@ -255,7 +265,7 @@ test("无本人投入的查看者得到相同的跨项目时间线，包括空�
   await expectErrorCode(getMeetingTimeline(actor(viewer), { kind: "PREVIEW", personIds: input.personIds, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd }), "FORBIDDEN");
 });
 
-test("会议详情仅本人投入可管理，只有参会者可新增且预览仍只读", async () => {
+test("会议详情按逐条权限管理投入，全局管理员可代录且预览仍只读", async () => {
   const { admin, viewer, participant, input } = await fixture();
   const task = await createTask({ ownerAccountId: participant.account.id,
     title: `非参会者展示任务 ${randomUUID()}`, team: "英雄", techGroup: "电控",
@@ -271,18 +281,22 @@ test("会议详情仅本人投入可管理，只有参会者可新增且预览�
     taskId: task.taskId, startAt: atHour(11), endAt: atHour(12), content: "展示任务的非参会者投入" });
   const query = { kind: "SAVED", meetingId: meeting.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
   const adminActor = actor(admin, [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }]);
-  for (const [currentActor, ownId, canCreate] of [
-    [actor(participant), participantSegment.id, true],
-    [adminActor, adminSegment.id, true],
-    [actor(viewer), viewerSegment.id, false],
+  for (const [currentActor, editableIds, canCreate] of [
+    [actor(participant), [participantSegment.id, viewerSegment.id], true],
+    [adminActor, [participantSegment.id, adminSegment.id, viewerSegment.id], true],
+    [actor(viewer), [viewerSegment.id], false],
   ] as const) {
     const timeline = await getMeetingTimeline(currentActor, query);
     expect(timeline.rows.find((row) => row.id === currentActor.personId)?.capabilities.canCreateSegment).toBe(canCreate);
     for (const segment of timeline.segments) {
       if (segment.kind !== "SEGMENT") continue;
-      expect(segment.permissions.canEdit).toBe(segment.id === ownId);
-      expect(segment.permissions.canSoftDelete).toBe(segment.id === ownId);
+      expect(segment.permissions.canEdit).toBe(editableIds.includes(segment.id));
+      expect(segment.permissions.canSoftDelete).toBe(editableIds.includes(segment.id));
     }
+  }
+  for (const role of ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] as const) {
+    const timeline = await getMeetingTimeline({ ...adminActor, systemRoles: [{ role, team: "", techGroup: "" }] }, query);
+    expect(timeline.rows.every((row) => row.capabilities.canCreateSegment)).toBe(true);
   }
   const preview = await getMeetingTimeline(adminActor, { kind: "PREVIEW", personIds: [admin.person.id, participant.person.id],
     timelineDisplay: { projectIds: [], taskIds: [task.taskId] }, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd });

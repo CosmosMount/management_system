@@ -650,9 +650,18 @@ export function ResourcePlannerCanvasClient({
         ) ?? null
       : null;
     staleRefreshFocusRef.current = null;
+    // A delayed post-save refresh must not close a record the user just reopened.
+    const reopenedSegment = externalFocusRef.current.focusId === initialFocusId &&
+      externalFocusRef.current.revision === initialFocusRevision
+      ? initialModel.segments.find((segment) =>
+          segment.id === openSegmentIdRef.current && segment.visibility === "FULL",
+        )
+      : null;
     const nextSelection: TimeCanvasSelection = staleFocusedSegment
       ? { kind: "SEGMENT", id: staleFocusedSegment.id }
-      : effectiveInitialSelection;
+      : reopenedSegment
+        ? { kind: "SEGMENT", id: reopenedSegment.id }
+        : effectiveInitialSelection;
     setSelection(nextSelection);
     const focusedSegment = nextSelection?.kind === "SEGMENT"
       ? initialModel.segments.find(
@@ -664,7 +673,7 @@ export function ResourcePlannerCanvasClient({
     setOpenSegmentId(focusedSegment?.id ?? null);
     updateDialogDirty(false);
     resetInspector(Boolean(focusedSegment));
-  }, [effectiveInitialSelection, initialCenterMs, initialModel, persistViewportInUrl, resetInspector, updateDialogDirty]);
+  }, [effectiveInitialSelection, initialCenterMs, initialFocusId, initialFocusRevision, initialModel, persistViewportInUrl, resetInspector, updateDialogDirty]);
   useEffect(() => {
     if (
       dialogDirty ||

@@ -218,7 +218,8 @@ async function loadPersonCreateCapabilities(
         ? selfRequiresTask
           ? hasSelfEligibleTask
           : canCreateForPerson(actor, personId, null)
-        : manageablePersonIds.has(personId),
+        : (!selfRequiresTask && canCreateForPerson(actor, personId, null)) ||
+          manageablePersonIds.has(personId),
     );
   }
   return result;

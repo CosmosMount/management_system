@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
 import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
+import { createWorkSegment } from "../lib/project-management/application/segment-service";
 
 import {
   RANGE_END,
@@ -20,6 +21,28 @@ import {
 } from "./helpers/project-management-canvas-security-fixtures";
 
 test.describe("project management canvas security project-management-canvas-scope-permissions", () => {
+  test("global administrators can create independent investments for people without tasks", async () => {
+    const person = await createAccountPerson("没有任务的在职人员");
+    const outsider = await createAccountPerson("普通查看人");
+    const input = canvasInput({ scope: { kind: "RESOURCE_PLANNER" }, groupBy: "PERSON", personIds: [person.person.id] });
+    const denied = await getTimeCanvasData({ actor: actor(outsider), input });
+    expect(denied.rows[0].capabilities.canCreateSegment).toBe(false);
+    const segmentInput = { personId: person.person.id, startAt: atHour(9), endAt: atHour(10), content: "代录独立投入", taskId: null };
+    await expectErrorCode(createWorkSegment(actor(outsider), segmentInput), "FORBIDDEN");
+    for (const role of ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] as const) {
+      const administrator = await createAccountPerson("独立投入管理员");
+      await prisma.systemRoleAssignment.create({ data: { accountId: administrator.account.id, role } });
+      const viewer = actor(administrator, [{ role, team: "", techGroup: "" }]);
+      const data = await getTimeCanvasData({ actor: viewer, input });
+      expect(data.rows[0].capabilities.canCreateSegment).toBe(true);
+      const created = await createWorkSegment(viewer, segmentInput);
+      const audit = await prisma.workSegmentChange.findFirstOrThrow({ where: { segmentId: created.segment.id } });
+      expect(audit).toMatchObject({ action: "CREATE", actorAccountId: administrator.account.id });
+      const inactive = await getTimeCanvasData({ actor: { ...viewer, isActive: false }, input });
+      expect(inactive.rows[0].capabilities.canCreateSegment).toBe(false);
+    }
+  });
+
   test("task rows and plan anchors expose only the current non-deleted project identity", async () => {
     const owner = await createAccountPerson("时间线项目表头负责人");
     const task = await createTask({

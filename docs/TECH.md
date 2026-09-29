@@ -22,8 +22,8 @@
 - 模板管理路由为 `/progress/meetings/templates/new` 和 `/progress/meetings/templates/[id]/edit`。`/progress/meetings/new?templateId=...` 只在页面初始化时读取模板，弹窗选择则通过 Server Action 读取；客户端显式复制各数组和内容，随后保存会议不提交模板 ID、不重新加载模板。会议表单与模板表单共用非时间字段组件，模板不展示时间或时间线预览。
 
 - `MeetingRecord.timelineDisplay` 使用 JSON `{ projectIds, taskIds }` 保存展示选择，无项目／任务关系表；ID 在边界规范化，事务校验新增选择，与会议版本、幂等创建和审计一同持久化。旧客户端更新省略配置时保留原值，显式空数组用于清除。
-- 会议详情及表单预览使用 `ResourcePlannerCanvasClient` 的完整预加载模式，默认周尺度。已保存详情按当前用户生成投入权限：本人可编辑、删除；仅参会者可新增本人投入。表单预览、其他人员投入及计划节点只读。投入写入复用现有服务端权限、版本和审计规则；保存后重新获取会议时间线，编辑期间暂停定时刷新。会议与工作台共同调用 `resolveContentNavigationWindow`，按上海日历月留白、保留今天和完整内容范围，并限制单次显示窗口为三年；已完整加载的画布可以在本地定位最早／最新内容。会议数据仍由专用服务完整加载，保留原查询范围和 5000 容量保护，不调用个人范围的分块接口，不新增数据库结构。
-- 时间线服务实时展开可用项目的当前任务，与直接选择任务去重，复用任务计划加载器；参与人投入与所选任务全部人员投入取并集。计划节点始终只读，已保存详情仅开放上述本人投入权限。软删除对象不展开、不暴露名称，只报告不可用数量；已保留的不可用选择允许随会议保存或移除。任务与节点／工作记录分别保留 5000 容量保护。
+- 会议详情及表单预览使用 `ResourcePlannerCanvasClient` 的完整预加载模式，默认周尺度。已保存详情按当前用户生成投入权限：复用统一逐条权限，本人、对应 Task Owner 和全局管理员可编辑、删除有权限的投入，管理员代改不要求参会；普通参会者可新增本人投入，全局管理员可为展示的在职人员拖选新增投入。表单预览及计划节点只读。投入写入复用现有服务端权限、版本和审计规则；保存后重新获取会议时间线，编辑期间暂停定时刷新。会议与工作台共同调用 `resolveContentNavigationWindow`，按上海日历月留白、保留今天和完整内容范围，并限制单次显示窗口为三年；已完整加载的画布可以在本地定位最早／最新内容。会议数据仍由专用服务完整加载，保留原查询范围和 5000 容量保护，不调用个人范围的分块接口，不新增数据库结构。
+- 时间线服务实时展开可用项目的当前任务，与直接选择任务去重，复用任务计划加载器；参与人投入与所选任务全部人员投入取并集。计划节点始终只读，已保存详情直接采用统一 Segment 权限，不再覆盖为仅本人可编辑。软删除对象不展开、不暴露名称，只报告不可用数量；已保留的不可用选择允许随会议保存或移除。任务与节点／工作记录分别保留 5000 容量保护。
 
 - `/progress/meetings` 提供全员列表和详情，`/progress/meetings/new`、`/progress/meetings/[id]/edit` 仅允许在职全局 `SUPER_ADMINISTRATOR` 维护；所有 Server Actions 独立解析登录态，写事务内刷新角色。项目管理员不拥有会议写权限。
 - `MeetingRecord` 保存主题、工作范围、纪要、整数版本、创建账号及时间戳；`MeetingRecordParticipant` 关联人员，不含项目外键。关联采用 Restrict，防止账号／人员删除抹除历史。服务端校验主题 200 字、纪要 50000 字、1–50 位去重参与人及最长 366 天的半开区间。
@@ -220,7 +220,7 @@ Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTI
 
 近期动态只读取 `DomainAuditEvent`。白名单 formatter 返回中文标题和有界字段摘要，不把 raw `before/after` 中的内部 ID、hash、锁版本或未知 action 下发浏览器；DTO 只保留分页去重与安全详情链接需要的记录 ID/路径。筛选、`createdAt + id` 游标和 20 条分页均在服务端执行；Revision、Milestone、Terminal 和人员投入名称通过当前页最多 20 条事件的有界批量查询装配。所有新 Task 审计在统一审计写入函数中固化事件发生时的 `projectId`；Task 加入、移出或移动事件以 `before/after.projectId` 支持两个 Project 查询。既有缺少 `projectId` 的普通 Task 审计不回填，也不进入 Project 动态。客户端每 5 秒查询最新可见审计版本 token，隐藏页面暂停，恢复可见立即检查，并用请求序号防止旧结果覆盖。
 
-Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取全部未删除 Task，组内使用 `updatedAt desc, id asc`。查询加载这些 Task 的 Current Plan Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页按七种精确状态建立可折叠表格；仅存在数据的状态渲染分组，默认只展开并选择 `ACTIVE`，组级复选框支持全选、全不选和部分选择，表头显示“已展示数量/组内总数”。折叠状态与计划轨道选择相互独立，选择仅是页面内表现状态；显式 `focus` 深链会额外显示并展开目标 Task 的状态组。只读 TimeCanvas 的 Task 计划行由当前选择派生，人员行、Segment 查询范围和 Project/Task 成员全集不随选择收窄；客户端仍不能提交任意 Task ID 扩大服务端计划范围。全部计划共同受 5,000 节点上限约束；超限时保留 Project 与 Task 分组、停止向客户端下发节点正文、禁用计划显示控件，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 不恢复历史卡片；`PENDING_APPROVAL` 时根据 `pendingRequestId` 从现有请求 DTO 选择当前轮，展示轮次、提交人、提交时间和有序的请求 Task 及其中文状态，空 Task 请求显示明确空状态。概览上的 `#establishment` 锚点继续承接待办和通知深链。Project 查询继续由 `lib/project-management/queries/project-queries.ts` 提供稳定公共出口；列表、详情/时间线定位与 Project option 查询分别位于内部 `project-list-queries.ts`、`project-detail-queries.ts` 和 `project-option-queries.ts`，列表与详情共用 `project-query-support.ts` 的时间戳游标实现。
+Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取全部未删除 Task，组内使用 `updatedAt desc, id asc`。查询加载这些 Task 的 Current Plan Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页按七种精确状态建立可折叠表格；仅存在数据的状态渲染分组，默认只展开并选择 `ACTIVE`，组级复选框支持全选、全不选和部分选择，表头显示“已展示数量/组内总数”。折叠状态与计划轨道选择相互独立，选择仅是页面内表现状态；显式 `focus` 深链会额外显示并展开目标 Task 的状态组。TimeCanvas 的只读 Task 计划行由当前选择派生，人员行、Segment 查询范围和 Project/Task 成员全集不随选择收窄；客户端仍不能提交任意 Task ID 扩大服务端计划范围。全部计划共同受 5,000 节点上限约束；超限时保留 Project 与 Task 分组、停止向客户端下发节点正文、禁用计划显示控件，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 不恢复历史卡片；`PENDING_APPROVAL` 时根据 `pendingRequestId` 从现有请求 DTO 选择当前轮，展示轮次、提交人、提交时间和有序的请求 Task 及其中文状态，空 Task 请求显示明确空状态。概览上的 `#establishment` 锚点继续承接待办和通知深链。Project 查询继续由 `lib/project-management/queries/project-queries.ts` 提供稳定公共出口；列表、详情/时间线定位与 Project option 查询分别位于内部 `project-list-queries.ts`、`project-detail-queries.ts` 和 `project-option-queries.ts`，列表与详情共用 `project-query-support.ts` 的时间戳游标实现。
 
 Project 写入继续由 `lib/project-management/application/project-service.ts` 提供稳定公共出口。立项提交、重提和审批事务位于内部 `project-establishment-commands.ts`，元数据更新、结束和删除事务位于 `project-maintenance-commands.ts`，Task 归属变更及成员同步位于 `project-task-membership.ts`；共享锁、锁后读取、授权资源和乐观锁守卫集中在 `project-command-context.ts`，头像补偿与成员替换集中在 `project-edit-support.ts`。该拆分不改变事务闭包、跨聚合锁和行锁顺序、幂等键、状态校验、Prisma 写入、审计或通知事件。
 
@@ -256,7 +256,8 @@ Revision 候选自身及后缀中的 Milestone 与 Termination 必须保持 `PEN
 
 - `WorkSegment` 仅保留人员、起止时间、内容、可选 Task 和创建/修改/软删除元数据。写入口为 `createWorkSegment`、`updateWorkSegment`、`softDeleteWorkSegment`；严格拒绝类型、状态、优先级、输出、来源和旧批量/确认入参。
 - 所有写入在事务中记录 `WorkSegmentChange` 和 `DomainAuditEvent`，新动作只有 `CREATE/UPDATE/DELETE`。修改/删除必须提供 `expectedUpdatedAt`，更新时间单调递增，重复删除不重复审计。先锁关联 Task，再锁投入并复核关联/权限，保留任务成员变动的并发保护。
-- 全员可读取；本人、任务 Owner、全局管理员沿用现有管理权限；停用人员只读。关联人员须为有效 Owner/Participant，新建或改绑只允许草稿/进行中 Task。编辑已关联终态任务的内容/时间不改变任务关联，重复传相同任务 ID 不视为新关联。
+- 全员可读取；本人、任务 Owner、全局超级管理员及项目管理员沿用现有管理权限；停用操作者只读。我的工作、资源计划、人员看板、Task/Project 详情及已保存会议详情共用逐条权限；人员看板和 Project 详情支持拖选新增，会议允许普通参会者新增本人投入、全局管理员为展示的在职人员新增投入。查询能力与写事务通过 `hasValidSegmentTaskMember` 共用关联成员校验，异常关联投入在 UI 中也只读。关联人员须为有效 Owner/Participant，新建或改绑只允许草稿/进行中 Task。编辑已关联终态任务的内容/时间不改变任务关联，重复传相同任务 ID 不视为新关联。
+- 逐条历史查询先比较原始白名单字段再格式化，避免长内容截断、相同名称或分钟精度导致修改被遗漏；内容前后值完整返回，UI 对长值折叠并允许展开，时间显示到毫秒。历史包含操作者、操作说明、分页和失败重试，写事务保留前后快照；不新增审计表或必填修改原因。投入 Actions 同步失效人员看板及 Task/Project/会议详情页面缓存，覆盖改绑前后及跨任务展示。
 - 输入要求有效时间、结束晚于开始、单条最长 31 天和最多 2,000 字非空内容；允许过去、当前、未来和重叠。没有状态迁移、确认待办、投入通知或容量模型。桌面拖动及调整边界使用同一单条更新接口。
 - `20260907120000_unify_work_segments` 将旧三表和专用枚举改名 Legacy，按原默认可见集合回填新表并核对完整字段。归档原值/来源/变更不改写，以只读触发器保护；内部关联保留，外部账号/人员/任务外键解除，避免日常业务改写历史。Prisma 精确映射 `@@ignore` 模型，防止后续迁移误删归档。旧领域审计原样保留，迁移另写 `source=MIGRATION` 汇总审计。
 - 迁移在停写及暂停 worker 时取消旧确认消息和未完成收件人、释放投递锁、标记相关站内通知已读。投入状态 cron、到期查询、待办分支及通知偏好入口移除；投递层保留最小退役事件拦截，既不发信也不无限重试旧载荷。
@@ -279,7 +280,7 @@ Action Inbox 聚合的稳定公共出口位于 `lib/project-management/queries/a
 
 全局队列按严重度、相关时间和稳定业务 ID 合并。首次查询时间固定为 `generatedAt`，后续页沿用该时间计算逾期和严重度；版本化 Base64URL 游标绑定 `accountId/personId/generatedAt`，保存六条流各自的 `(relevantAt,id)` keyset 位置，并使用 `AUTH_SECRET`（兼容 `NEXTAUTH_SECRET`）进行 HMAC 签名，加载前还会复核游标锚点仍属于当前 actor 的队列。完整页每次读取 50 项并通过只读 Server Action `app/actions/project-management/action-inbox.ts` 加载更多，驾驶舱只请求前 8 项。DTO 显式返回 Project、Task、Node 类型/状态、相关时间和操作文案。通用纵向列表样式由 `components/ui/list.tsx` 提供语义化 `List/ListItem/ListContent/ListActions/ListEmpty`；本次仅迁移 Action Inbox，其他业务可逐步复用同一风格。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面使用可折叠的 sticky 左侧导航，窄屏使用保留完整入口的模块导航抽屉。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`kanban`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals` 均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面使用可折叠的 sticky 左侧导航，窄屏使用保留完整入口的模块导航抽屉。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`kanban`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals` 均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示任务概览与 Current Plan，人员投入仍按逐条权限编辑，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
 
 采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由统一侧栏或窄屏导航抽屉承担。独立工坊加工费入口已下线，旧路径返回 404；普通采购明细中的加工费种类与历史 `isWorkshopFee` 订单保持兼容。
 
@@ -292,6 +293,8 @@ Composer 的浏览器安全契约位于 `lib/project-management/composer-contrac
 TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支持周/月/季/年缩放、虚拟行、键盘焦点、刷选、Segment 横移/缩放和节点锚点；同时保留精确表单。资源计划按不超过 180 天的上海时区块自适应加载并缓存，URL 使用 `focus`、`center`、`scale`、`projects`/`tasks`/`people` 和 Task 状态多选 `taskStatuses`；缺失 `taskStatuses` 规范化为默认 `DRAFT,ACTIVE` 并在 URL 中省略，空集合保留为 `taskStatuses=`，非默认集合按固定枚举顺序序列化。`focus` 可定位投入及人员，但不绕过状态筛选增加 Task 计划。`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end`、`zoom` 以及已退役的 `taskCursor`/`personCursor` 会被忽略并从规范 URL 移除。mutation 后以权威刷新为准。详情 Dialog 只向目标 Segment 注入可编辑 transform；详情与悬浮提示都展示关联 Task 名称，无 Task 时显示“独立投入”，Busy 不泄露 Task。
 
 统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；可选的锚点多选交互按可编辑锚点中心点完成矩形命中，并以同一画布时间差预览和移动整组，通用时间数学保证整组仍位于半开区间。Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界、Revision 只读排除和 Milestone 自动重排仍由 Composer 负责。人员投入总览覆盖既有 Segment 的写权限，通过双击、Enter 或显式按钮打开详情；详情 Dialog 才向目标 Segment 注入 transform 回调，同一行其他 Segment 始终只读。所有视口均使用 `@tanstack/react-virtual` 的横向时间画布，窄屏仅在画布容器内滚动。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
+
+我的工作、资源计划、人员时间线、Task 和 Project 详情复用 `ResourcePlannerCanvasClient` 的人员行拖选及 `QuickCreatePanel`，创建范围来自服务端人员行能力。没有 Task 筛选时，全局管理员可为没有有效 Task 的在职人员创建独立投入；有 Task 筛选时仍须满足任务状态及成员关联校验。已保存会议允许普通参会者新增本人投入、全局管理员为展示的在职人员新增投入，使用同一拖选表单；会议预览、历史归档和计划对比保持只读。既有投入编辑权限与创建能力分别判定。
 
 TimeCanvas 的键盘焦点、刷选与 Segment 变换数学、只读 Inspector、工具栏/Axis/底部滚动条、全局关键时间点层、上海日历网格/阶段轨道/今日线以及共享布局常量已经从主渲染器分离；主渲染器继续只负责编排、虚拟化、视口/选择与 Inspector，行级刷选和创建区间位于 `time-canvas-row.tsx`，Segment/Anchor 对象交互位于 `time-canvas-objects.tsx`，内部依赖保持 `time-canvas → row → objects` 单向；资源计划客户端的分块缓存与 URL 同步、展示骨架也各自拥有独立模块。`resource-planner-panels.tsx` 保留 Quick Create、Segment Inspector、范围格式化和草稿范围计算的稳定公共出口，Quick Create 位于 `resource-planner-quick-create-panel.tsx`，两类面板共用的 DTO、字段容器和上海时间范围校验位于 `resource-planner-panel-support.tsx`；Segment Inspector 与计划确认表单继续内聚。Plan 转 Actual 时，完整确认、部分确认和批量确认都必须提交实际输出；预期输出不要求用户重复填写，由 Actual 继承 Planned 的值。部分确认表单不收集原因，除确认范围和实际输出外仍要求实际投入内容；服务端继续生成系统变更说明。页面继续只依赖稳定的 `TimeCanvasProps`/`TimeCanvasModel`，直接拖动不按屏幕尺寸限制，详情内仍仅目标 Segment 可编辑。
 
@@ -388,7 +391,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 | 路径 | 功能 |
 |------|------|
 | `/progress` | 我的工作总览 |
-| `/progress/kanban` | 只读人员工作看板 |
+| `/progress/kanban` | 人员工作看板，按权限拖选新增、编辑及软删除投入 |
 | `/progress/tasks` | Task 列表 |
 | `/progress/projects` | Project 列表（默认我的 + 进行中；空搜索使用 `updatedAt + id` 稳定游标分页） |
 | `/progress/projects/new` | 提交 Project 立项 |

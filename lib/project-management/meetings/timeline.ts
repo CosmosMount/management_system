@@ -7,7 +7,7 @@ import { fullSegmentSelect } from "@/lib/project-management/queries/time-canvas-
 import { canCreateForPerson, toFullSegmentDto } from "@/lib/project-management/queries/time-canvas-dto";
 import { timeCanvasDataDtoSchema } from "@/lib/project-management/types/time-canvas";
 import { getTimeCanvasDataInputSchema, MAX_TIME_CANVAS_VISIBLE_SEGMENTS } from "@/lib/project-management/validations/time-canvas";
-import { taskReadableWhere } from "@/lib/project-management/authorization";
+import { isSystemAdministrator, taskReadableWhere } from "@/lib/project-management/authorization";
 import { loadTaskAnchors } from "@/lib/project-management/queries/time-canvas-anchor-loader";
 import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 import { assertCanManageMeetings, getMeeting } from "./service";
@@ -75,7 +75,7 @@ export async function getMeetingTimeline(actor: ProjectManagementActor, input: u
     return {
       ...segment,
       taskTitle: record.task ? [record.task.project?.deletedAt === null ? record.task.project.name : null, record.task.title].filter(Boolean).join(" / ") : null,
-      permissions: parsed.kind === "SAVED" && record.personId === actor.personId
+      permissions: parsed.kind === "SAVED"
         ? segment.permissions
         : { canViewDetails: true, canEdit: false, canMove: false, canResize: false, canSoftDelete: false },
     };
@@ -84,8 +84,8 @@ export async function getMeetingTimeline(actor: ProjectManagementActor, input: u
     kind: "PERSON" as const, id: person.id,
     label: `${person.displayName}${person.status === "INACTIVE" ? "（已停用）" : ""}`,
     sublabel: null, capabilities: { canCreateSegment:
-      parsed.kind === "SAVED" && personIds.includes(person.id) &&
-      person.id === actor.personId && person.status === "ACTIVE" &&
+      parsed.kind === "SAVED" && person.status === "ACTIVE" &&
+      (isSystemAdministrator(actor) || (personIds.includes(person.id) && person.id === actor.personId)) &&
       canCreateForPerson(actor, person.id, null) },
   }));
   const anchors = loadedAnchors.map((task) => ({

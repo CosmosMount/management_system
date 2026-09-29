@@ -345,8 +345,7 @@ export function ProjectDetailWorkspace({
                 projectId,
               }}
               mode="TASK_WORKBENCH"
-              allowCreate={false}
-              readOnly
+              showAnchorInspector
               initialFocusId={selectedAnchorId}
             />
           </div>
@@ -637,9 +636,7 @@ function mergeProjectTimelineModel(
     globalMarkers: resourceModel?.globalMarkers ?? [],
     rows: [
       ...planModel.rows,
-      ...(resourceModel?.rows
-        .filter((row) => row.kind === "PERSON")
-        .map((row) => ({ ...row, editable: false })) ?? []),
+      ...(resourceModel?.rows.filter((row) => row.kind === "PERSON") ?? []),
     ],
     segments: resourceModel?.segments ?? [],
     generatedAt: resourceModel?.generatedAt ?? planModel.generatedAt,
