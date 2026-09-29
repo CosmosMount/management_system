@@ -715,3 +715,5 @@ Playwright 结果：
 - `tests/project-management-ui-resource-planner.spec.ts` 在 Desktop `1440x1000` 覆盖新表单及单条操作；共享画布继续覆盖空/长/密集内容、分块加载、未保存提示、任务节点交互、只读和无页面横向溢出。
 - `tests/unified-work-segments-migration.spec.ts` 在受控 runner 的本机 `_test` 临时库验证完整迁移、可见集合/原 ID、归档来源和变更完整、只读保护、旧提醒取消、无关消息不变及 Prisma 结构一致。
 - 必须运行 `npm run check`、`npm run test:e2e`、`npm run build`；`npm run db:deploy` 的迁移验证必须显式指向隔离测试库。测试保持禁发开关和官方飞书出站 guard，不访问正常开发/生产数据库或真实收件人。
+
+- `tests/project-management-creation-drag-ui.spec.ts` 在 `1440x1000`、`393x851` 和 `360x851` 验证投入草稿跨行移动：默认一小时窄草稿可从中间跨行移动且起止时间不变；松手前预览的实际纵向位置跟随指针、人员仍保持原值；非法人员行和取消拖动恢复原值并清理高亮；有效落点更新表单与最终入库人员；边缘调整不产生跨行预览。继续运行既有 `project-management-ui-routes-responsive.spec.ts` 检查键盘跨行和快速创建流程。
