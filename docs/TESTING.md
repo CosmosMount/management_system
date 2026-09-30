@@ -12,6 +12,14 @@
 
 浏览器测试统一使用 `desktop` project。窄窗口检查在同一测试中调整窗口宽度，沿用同一权限和业务功能；窄屏导航使用抽屉，普通表格可重排为字段卡片，比较型表格和画布保持局部滚动。`project-management-s3-shell.spec.ts` 覆盖窄窗口导航与会议入口，`functional-panels.spec.ts` 覆盖职责和账号表格，`project-management-ui-routes-responsive.spec.ts` 覆盖投入创建范围操作与网络失败重试；仍须通过官方 runner 使用隔离数据库和通知禁发保护。
 
+## 项目／任务／会议匿名名称预览
+
+定向入口：`npm run test:e2e -- tests/project-management-link-preview.spec.ts tests/project-management-link-preview-query.spec.ts tests/project-management-notification-link-path.spec.ts`。仅通过官方 runner 使用隔离 PostgreSQL、受控服务和飞书禁发保护。
+
+覆盖原始 HTML head 的 title／Open Graph、普通和抓取器 UA、无 JavaScript 访问、GET／HEAD、所有业务状态、名称实时更新、软删除／非法 UUID 的统一 404、数据库故障的脱敏 503、最小公开返回字段、私有内容不泄露及无审计／outbox 写入。登录按钮保留时间线参数和浏览器锚点；登录后访问完整详情。会议同样覆盖主题预览、内容与参会人保密、改名、无效 ID 和登录回跳。检查列表／会议模板／新建／编辑／修订／附件／API／内部处理器和非文档请求仍需认证，并在桌面 `1440×1000`、窄窗口 `393×851`、`360px` 验证长名称、HTML 注入转义、键盘焦点和无横向溢出。
+
+认证入口及路由改动的完成门禁为 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`。上线后由用户粘贴项目／任务／会议链接至飞书，验收名称预览和登录回跳；自动化不发送真实飞书消息，标准元数据验证不代表第三方卡片缓存已刷新。
+
 ## 手机界面与视觉审查
 
 定向入口：`npm run test:e2e -- tests/mobile-shell.spec.ts tests/mobile-procurement.spec.ts tests/mobile-project-management.spec.ts tests/mobile-auxiliary.spec.ts`。覆盖桌面 1440×1000、393×851 和 360px 窄屏，以及共享导航的 768/1024px 断点两侧。真实触摸事件在官方 runner 内创建的触摸上下文中执行，不另开不受控数据库或浏览器测试入口。
@@ -402,7 +410,7 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 10. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 11. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 12. `/progress/projects/*` 与 `/progress/tasks/*` 是当前正式路由；旧路径不得重定向。带 `timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end` 或 `zoom` 的链接应忽略这些值，并将其从规范 URL 移除；`focus`、`center`、`scale` 与复数资源选择继续保留。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
-13. Project/Task 生命周期、审批、风险和评论通知的飞书按钮与站内通知必须使用同一个规范目标：Task 使用 `/progress/tasks/[id]`，Project 使用 `/progress/projects/[id]`，同时存在 `taskId/projectId` 时 Task 优先，不得回到“我的工作”。Terminal 的合法 `focus`、Project 立项的 `#establishment` 和 Segment 的 `/progress?focus=[segmentId]` 继续保留；已删除 Task/Project 分别回到对应列表。浏览器冒烟需验证登录后直达详情及未登录认证后的回跳，不要求定位单条风险、评论或审批记录。
+13. Project/Task 生命周期、审批、风险和评论通知的飞书按钮与站内通知必须使用同一个规范目标：Task 使用 `/progress/tasks/[id]`，Project 使用 `/progress/projects/[id]`，同时存在 `taskId/projectId` 时 Task 优先，不得回到“我的工作”。Terminal 的合法 `focus`、Project 立项的 `#establishment` 和 Segment 的 `/progress?focus=[segmentId]` 继续保留；已删除 Task/Project 分别回到对应列表。浏览器冒烟需验证登录后直达详情，以及未登录时先显示名称预览、点击登录后保留原目标的回跳，不要求定位单条风险、评论或审批记录。
 
 ### 待办与审批专项测试
 

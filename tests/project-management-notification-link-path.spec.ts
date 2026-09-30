@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { resolveProjectManagementNotificationLinkPath } from "../lib/project-management/notifications/link-path";
 import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
+import { createLinkPreviewFixtures } from "./helpers/project-management-link-preview-fixtures";
 
 type LinkPathTestCase = {
   name: string;
@@ -124,17 +125,21 @@ test.describe("project-management notification link path", () => {
     });
   }
 
-  test("匿名访问 Project/Task 详情时完整保留登录回跳目标", async ({
+  test("匿名预览 Project/Task/Meeting 后点击登录完整保留回跳目标", async ({
     context,
     page,
   }) => {
+    const fixture = await createLinkPreviewFixtures();
     await context.clearCookies();
     for (const target of [
-      "/progress/projects/project-login-return",
-      "/progress/tasks/task-login-return?focus=terminal-node",
+      `/progress/projects/${fixture.project.id}?center=2026-10-04T19%3A00%3A00.000Z&scale=week#establishment`,
+      `/progress/tasks/${fixture.task.taskId}?focus=${fixture.task.milestoneNodeId}&center=2026-09-23T01%3A00%3A00.000Z&scale=week`,
+      `/progress/meetings/${fixture.meeting.id}?center=2026-09-23T01%3A00%3A00.000Z&scale=week#meeting-content-heading`,
     ]) {
       const response = await page.goto(target);
-      expect(response?.status()).toBeLessThan(500);
+      expect(response?.status()).toBe(200);
+      await expect(page.getByRole("heading", { name: fixture.name, exact: true })).toBeVisible();
+      await page.getByRole("link", { name: "登录查看详情" }).click();
       const loginUrl = new URL(page.url());
       expect(loginUrl.pathname).toBe("/login");
       expect(loginUrl.searchParams.get("callbackUrl")).toBe(target);
