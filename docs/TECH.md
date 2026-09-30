@@ -127,6 +127,14 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 人员与 Task option 查询采用有界两阶段搜索：非空查询在授权 where 内最多读取 501 个直接或回退候选，按 NFKC、前缀、分词前缀、子串、拼音首字母与顺序匹配评分并返回前 50 项；空查询保留绑定 filter hash 的稳定 ID 游标。`option-queries.ts` 保留稳定公共出口和人员查询，Task 查询位于内部 `task-option-queries.ts`，两者共用 `option-query-support.ts` 的候选上限、去重和游标校验。批量 resolver 按输入顺序完整恢复已选 ID 且静默丢弃不可见对象，不再沿用旧 50 项上限。客户端基于 Base UI Combobox，使用 250ms 防抖、scope/filter 缓存和请求序列防止旧响应覆盖。
 
+### 项目／任务／会议匿名名称预览
+
+`proxy.ts` 为匿名普通 GET／HEAD 的 `/progress/projects/[id]`、`/progress/tasks/[id]`、`/progress/meetings/[id]` 设置内部请求标记，Next.js 的 `beforeFiles` 规则将其重写至 `/link-preview/progress/[kind]/[id]`。独立 Node.js Route Handler 返回完整 HTML，不进入进度模块布局、不依赖流式 metadata 或 User-Agent 检测，浏览器保留原地址。列表、`new`、会议模板、编辑、修订、POST／Server Action、RSC／预取及内部预览地址的直接匿名请求继续要求认证；登录态详情仍沿用原页面和服务端权限。
+
+公开查询校验合法 UUID，只选择 Project `name`、Task `title` 或 MeetingRecord `topic`，不加载完整详情。项目／任务要求 `deletedAt: null`，不按状态过滤；会议模型没有软删除字段，所有现存会议均可预览主题。响应提供 title、Open Graph 标签及名称和登录入口，动态文本和属性统一 HTML 转义，回跳仅由原详情路径和查询参数构造；锚点由浏览器脚本补入。响应为 `private, no-store`，携带 `Vary: Cookie` 和 `noindex, nofollow, noarchive`；无效／已删除记录统一 404，查询故障返回中文 503 并记录脱敏结构化错误。预览不写业务记录、不创建通知，无数据库迁移或新增环境变量。
+
+使用框架默认 URL 归一化和相对路径重写，避免 localhost 或 Auth.js 的域名转换引入外部 HTTP 转发。`x-pnx-progress-preview` 标记仅由代理为匿名详情读取请求设置，登录请求会移除客户端携带的标记。Next.js 在代理前隐藏、重写后恢复的 Flight 请求头由预览处理器再次检查，读取名称前即跳转登录；回跳移除框架内部 `_rsc` 参数并保留业务参数。
+
 ## 权限
 
 | 模块 | 文件 | 说明 |

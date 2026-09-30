@@ -47,6 +47,17 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  async rewrites() {
+    return {
+      beforeFiles: ["projects", "tasks", "meetings"].map((kind) => ({
+        source: `/progress/${kind}/:id`,
+        has: [{ type: "header" as const, key: "x-pnx-progress-preview", value: "1" }],
+        destination: `/link-preview/progress/${kind}/:id`,
+      })),
+      afterFiles: [],
+      fallback: [],
+    };
+  },
   async redirects() {
     return [
       { source: "/apply", destination: "/procurement/new", permanent: true },

@@ -30,6 +30,21 @@ const authMiddleware = middlewareAuth(async (req) => {
   }
 
   if (!isLoggedIn) {
+    const detail = /^\/progress\/(projects|tasks|meetings)\/([^/]+)$/.exec(pathname);
+    const isDocumentRead =
+      (req.method === "GET" || req.method === "HEAD") &&
+      !req.headers.has("rsc") &&
+      !req.headers.has("next-router-prefetch") &&
+      !req.headers.has("next-action") &&
+      !req.headers.get("purpose")?.includes("prefetch") &&
+      !req.headers.get("sec-purpose")?.includes("prefetch");
+    if (detail && !["new", "templates"].includes(detail[2]) && isDocumentRead) {
+      // 由 next.config.ts 的相对路径重写处理，避免 Auth.js 域名或 localhost 归一化引入外部转发。
+      const headers = new Headers(req.headers);
+      headers.set("x-pnx-progress-preview", "1");
+      return NextResponse.next({ request: { headers } });
+    }
+
     if (pathname === "/api/live-version") {
       return NextResponse.json({ error: "未登录" }, { status: 401 });
     }
@@ -53,6 +68,12 @@ const authMiddleware = middlewareAuth(async (req) => {
     return NextResponse.redirect(loginUrl);
   }
 
+  // 已登录请求不可通过伪造标记切换到公开预览，包括带此标记的 Server Action。
+  if (req.headers.has("x-pnx-progress-preview")) {
+    const headers = new Headers(req.headers);
+    headers.delete("x-pnx-progress-preview");
+    return NextResponse.next({ request: { headers } });
+  }
   return NextResponse.next();
 });
 
