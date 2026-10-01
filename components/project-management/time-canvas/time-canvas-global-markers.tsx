@@ -8,12 +8,8 @@ import {
   timeToX,
 } from "@/components/project-management/time-canvas/time-math";
 import { edgeScrollCanvas } from "@/components/project-management/time-canvas/time-canvas-dom";
+import { TimeGrid, TodayLine } from "@/components/project-management/time-canvas/time-canvas-layers";
 import {
-  TimeGrid,
-  TodayLine,
-} from "@/components/project-management/time-canvas/time-canvas-layers";
-import {
-  ADMIN_MARKER_STAGE_HEIGHT,
   GLOBAL_MARKER_LABEL_TOP,
   GLOBAL_MARKER_LANE_STRIDE,
 } from "@/components/project-management/time-canvas/time-canvas-layout";
@@ -41,16 +37,26 @@ export function GlobalMarkerOverlay({
   scale,
   visibleWindow,
   rowHeaderWidth,
+  dayStripes,
+  nowMs,
+  interaction,
+  maximumVisibleLanes = 2,
+  showVisibleTime = false,
 }: {
   markers: TimeCanvasGlobalMarker[];
   scale: ReturnType<typeof createTimeScale>;
   visibleWindow: TimeCanvasRange;
   rowHeaderWidth: number;
+  dayStripes?: number[];
+  nowMs?: number;
+  interaction?: TimeCanvasInteractionOptions;
+  maximumVisibleLanes?: number;
+  showVisibleTime?: boolean;
 }) {
-  if (markers.length === 0) return null;
+  if (markers.length === 0 && !dayStripes && nowMs === undefined) return null;
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 z-[24] overflow-hidden"
+      className={cn("pointer-events-none absolute inset-y-0 z-[24] overflow-hidden", dayStripes && "bg-muted/20")}
       style={{
         left: rowHeaderWidth,
         width: scale.contentWidthPx,
@@ -58,60 +64,17 @@ export function GlobalMarkerOverlay({
       aria-label="全局关键时间点"
       data-testid="time-canvas-global-markers"
     >
+      {dayStripes && <TimeGrid dayStripes={dayStripes} scale={scale} />}
       <GlobalMarkerLines markers={markers} scale={scale} />
       <GlobalMarkerLabels
         markers={markers}
         scale={scale}
         visibleWindow={visibleWindow}
-        showVisibleTime={false}
+        interaction={interaction}
+        maximumVisibleLanes={maximumVisibleLanes}
+        showVisibleTime={showVisibleTime}
       />
-    </div>
-  );
-}
-
-export function AdminGlobalMarkerStage({
-  markers,
-  scale,
-  visibleWindow,
-  dayStripes,
-  nowMs,
-  rowHeaderWidth,
-  interaction,
-}: {
-  markers: TimeCanvasGlobalMarker[];
-  scale: ReturnType<typeof createTimeScale>;
-  visibleWindow: TimeCanvasRange;
-  dayStripes: number[];
-  nowMs: number;
-  rowHeaderWidth: number;
-  interaction: TimeCanvasInteractionOptions | undefined;
-}) {
-  return (
-    <div
-      className="sticky top-16 z-[28] grid border-b border-border bg-card/95 backdrop-blur"
-      style={{
-        height: ADMIN_MARKER_STAGE_HEIGHT,
-        gridTemplateColumns: `${rowHeaderWidth}px ${scale.contentWidthPx}px`,
-      }}
-      data-testid="time-canvas-global-marker-stage"
-    >
-      <div className="sticky left-0 z-30 border-r border-border bg-card" aria-hidden="true" />
-      <div
-        className="relative overflow-hidden bg-muted/20"
-        aria-label="关键时间点拖动区域"
-      >
-        <TimeGrid dayStripes={dayStripes} scale={scale} />
-        <GlobalMarkerLines markers={markers} scale={scale} />
-        <GlobalMarkerLabels
-          markers={markers}
-          scale={scale}
-          visibleWindow={visibleWindow}
-          interaction={interaction}
-          maximumVisibleLanes={4}
-          showVisibleTime
-        />
-        <TodayLine scale={scale} nowMs={nowMs} overContent />
-      </div>
+      {nowMs !== undefined && <TodayLine scale={scale} nowMs={nowMs} overContent />}
     </div>
   );
 }
@@ -413,10 +376,10 @@ function GlobalMarkerHandle({
         const scroller = event.currentTarget.closest<HTMLElement>(
           "[data-testid='time-canvas-scroll']",
         );
-        const stage = event.currentTarget.closest<HTMLElement>(
-          "[data-testid='time-canvas-global-marker-stage']",
+        const markerSurface = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-global-markers']",
         );
-        const stageRect = stage?.getBoundingClientRect();
+        const surfaceRect = markerSurface?.getBoundingClientRect();
         event.preventDefault();
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -424,8 +387,8 @@ function GlobalMarkerHandle({
           pointerId: event.pointerId,
           clientX: event.clientX,
           scrollLeft: scroller?.scrollLeft ?? 0,
-          stageTop: stageRect?.top ?? Number.NEGATIVE_INFINITY,
-          stageBottom: stageRect?.bottom ?? Number.POSITIVE_INFINITY,
+          stageTop: surfaceRect?.top ?? Number.NEGATIVE_INFINITY,
+          stageBottom: surfaceRect?.bottom ?? Number.POSITIVE_INFINITY,
         });
         setPreviewAtMs(marker.atMs);
       }}

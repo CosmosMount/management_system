@@ -50,12 +50,11 @@ import {
   TimeCanvasToolbar,
 } from "@/components/project-management/time-canvas/time-canvas-chrome";
 import {
-  AdminGlobalMarkerStage,
   GlobalMarkerOverlay,
 } from "@/components/project-management/time-canvas/time-canvas-global-markers";
 import {
-  ADMIN_MARKER_STAGE_HEIGHT,
   AXIS_HEIGHT,
+  GLOBAL_MARKER_SURFACE_HEIGHT,
 } from "@/components/project-management/time-canvas/time-canvas-layout";
 import { TimelineRow } from "@/components/project-management/time-canvas/time-canvas-row";
 
@@ -130,11 +129,9 @@ export function TimeCanvas({
     [model.phaseBands],
   );
   const globalMarkers = model.globalMarkers ?? [];
-  const showAdminMarkerStage = mode === "ADMIN_TIME_MARKERS";
-  const markerOnlyCanvas =
+  const hideEmptyState =
     mode === "ADMIN_TIME_MARKERS" && model.rows.length === 0;
-  const canvasChromeHeight =
-    AXIS_HEIGHT + (showAdminMarkerStage ? ADMIN_MARKER_STAGE_HEIGHT : 0);
+  const canvasChromeHeight = AXIS_HEIGHT;
   const liveNowMs = useCanvasNow(model.generatedAt);
   const focusTargets = useMemo(
     () =>
@@ -516,12 +513,12 @@ export function TimeCanvas({
             : "md:grid-cols-1",
         )}
       >
-        <div className={cn("relative min-w-0", markerOnlyCanvas && "pb-4")} data-testid="time-canvas-scroll-shell">
+        <div className={cn("relative min-w-0", hideEmptyState && "pb-4")} data-testid="time-canvas-scroll-shell">
           <div
             ref={scrollElementRef}
             className={cn(
               "relative max-h-[min(68dvh,44rem)] min-w-0 touch-auto overflow-x-auto overflow-y-auto overscroll-contain",
-              markerOnlyCanvas ? "min-h-0" : "min-h-72",
+              hideEmptyState ? "min-h-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : "min-h-72",
             )}
             data-testid="time-canvas-scroll"
             onScroll={(event) => {
@@ -575,31 +572,42 @@ export function TimeCanvas({
                 leadingLabel={mode === "ADMIN_TIME_MARKERS" ? "日期" : "任务 / 人员"}
               />
 
-              {showAdminMarkerStage && (
-                <AdminGlobalMarkerStage
-                  markers={globalMarkers}
-                  scale={scale}
-                  visibleWindow={visibleWindow}
-                  dayStripes={dayStripes}
-                  nowMs={liveNowMs}
-                  rowHeaderWidth={rowHeaderWidth}
-                  interaction={interaction}
-                />
-              )}
-
-              {markerOnlyCanvas ? null : model.rows.length === 0 ? (
-                <div className="relative min-h-64">
-                  <div
-                    className="sticky left-0 flex min-h-64 w-[calc(100vw-2rem)] max-w-full items-center justify-center p-8 text-center text-sm text-muted-foreground"
-                    data-testid="time-canvas-empty"
-                  >
-                    {emptyMessage}
-                  </div>
+              {model.rows.length === 0 ? (
+                <div
+                  className={cn(
+                    "relative",
+                    hideEmptyState
+                      ? "sticky top-16 z-[28] border-b border-border bg-card/95 backdrop-blur"
+                      : "min-h-64",
+                  )}
+                  style={hideEmptyState ? { height: GLOBAL_MARKER_SURFACE_HEIGHT } : undefined}
+                  data-testid="time-canvas-empty-content"
+                >
+                  {hideEmptyState && (
+                    <div
+                      className="sticky left-0 z-30 h-full border-r border-border bg-card"
+                      style={{ width: rowHeaderWidth }}
+                      aria-hidden="true"
+                    />
+                  )}
+                  {!hideEmptyState && (
+                    <div
+                      className="sticky left-0 flex min-h-64 w-[calc(100vw-2rem)] max-w-full items-center justify-center p-8 text-center text-sm text-muted-foreground"
+                      data-testid="time-canvas-empty"
+                    >
+                      {emptyMessage}
+                    </div>
+                  )}
                   <GlobalMarkerOverlay
                     markers={globalMarkers}
                     scale={scale}
                     visibleWindow={visibleWindow}
                     rowHeaderWidth={rowHeaderWidth}
+                    dayStripes={hideEmptyState ? dayStripes : undefined}
+                    nowMs={hideEmptyState ? liveNowMs : undefined}
+                    interaction={hideEmptyState ? interaction : undefined}
+                    maximumVisibleLanes={hideEmptyState ? 4 : undefined}
+                    showVisibleTime={hideEmptyState}
                   />
                 </div>
               ) : (

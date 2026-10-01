@@ -356,15 +356,19 @@ test.describe("管理员面板", () => {
     try {
     await page.goto("/admin/time-markers", { waitUntil: "networkidle" });
     await expect(page.getByTestId("admin-global-time-markers")).toBeVisible();
-    const markerStage = page.getByTestId("time-canvas-global-marker-stage");
-    const stageGrid = markerStage.getByTestId("time-canvas-time-grid");
+    const markerSurface = page.getByTestId("time-canvas-global-markers");
     const axisTodayLine = page.getByTestId("time-canvas-today-axis");
-    const stageTodayLine = markerStage.getByTestId("time-canvas-today-line");
-    await expect(stageGrid).toBeVisible();
-    expect(await stageGrid.locator(":scope > span").count()).toBeGreaterThan(1);
-    await expect(axisTodayLine).toBeVisible();
+    await expect(
+      page.getByRole("img", { name: /Asia\/Shanghai .*级时间轴/ }),
+    ).toHaveCount(1);
+    await expect(page.getByTestId("time-canvas-global-marker-stage")).toHaveCount(0);
+    await expect(axisTodayLine).toHaveCount(1);
+    const stageTodayLine = markerSurface.getByTestId("time-canvas-today-line");
+    const markerGrid = markerSurface.getByTestId("time-canvas-time-grid");
+    await expect(markerGrid).toBeVisible();
+    expect(await markerGrid.locator(":scope > span").count()).toBeGreaterThan(1);
     await expect(stageTodayLine).toBeVisible();
-    const overflowMarker = markerStage.getByTestId("global-time-marker-overflow");
+    const overflowMarker = markerSurface.getByTestId("global-time-marker-overflow");
     await expect(overflowMarker).toBeVisible();
     await expect(overflowMarker).toContainText("+3 个关键点");
     await expect(overflowMarker).toHaveAttribute(
@@ -402,6 +406,29 @@ test.describe("管理员面板", () => {
     expect(
       Math.abs(stageTodayBox.y - (axisTodayBox.y + axisTodayBox.height)),
     ).toBeLessThanOrEqual(1);
+    for (const viewport of [
+      { width: 1440, height: 1000 },
+      { width: 393, height: 851 },
+      { width: 360, height: 851 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.getByRole("button", { name: "今天", exact: true }).click();
+      await expect(markerSurface).toHaveCSS("height", "91px");
+      await expect(page.getByTestId("time-canvas-empty-content")).toHaveCSS("height", "92px");
+      await expect(page.getByLabel("时间轴横向滚动", { exact: true })).toHaveCount(1);
+      await expect(page.getByTestId("time-canvas-scroll")).toHaveCSS("scrollbar-width", "none");
+      await expect(markerGrid.locator("span.bg-muted\\/35").first()).toBeAttached();
+      const axisBox = await axisTodayLine.boundingBox();
+      const lineBox = await stageTodayLine.boundingBox();
+      if (!axisBox || !lineBox) throw new Error("无法读取当前时间红线位置");
+      expect(lineBox.x).toBeCloseTo(axisBox.x, 0);
+      expect(Math.abs(lineBox.y - axisBox.y - axisBox.height)).toBeLessThanOrEqual(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+      await expectHealthyPage(page);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({ path: test.info().outputPath(`time-markers-${viewport.width}.png`), animations: "disabled" });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole("button", { name: "新增时间点" }).click();
     const newEditor = page.getByTestId(/^global-time-marker-editor-/).last();
     const newNameInput = newEditor.getByLabel(/名称/);
@@ -439,7 +466,7 @@ test.describe("管理员面板", () => {
     ).toBeVisible();
     const handle = page.getByTestId(`global-time-marker-${persisted.id}`);
     if ((await handle.count()) === 0) {
-      await markerStage.getByTestId("global-time-marker-overflow").click();
+      await markerSurface.getByTestId("global-time-marker-overflow").click();
       await page
         .getByTestId(`global-time-marker-overflow-item-${persisted.id}`)
         .click();
